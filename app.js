@@ -25,6 +25,9 @@
     grayscale: false
   };
 
+  let kept = new Set();
+  let lastClickedIndex = null;
+
   const stageDrop = $('stage-drop');
   const stage1 = $('stage-1');
   const stage2Overlay = $('stage-2-overlay');
@@ -49,6 +52,7 @@
       el.classList.toggle('is-current', i === at);
       el.classList.toggle('is-done', i < at);
     });
+    updateKeepTotals();
     const fileEl = $('app-file');
     if (fileEl) {
       fileEl.textContent = '';
@@ -102,40 +106,53 @@
     return canvas;
   }
 
+  // A page is a card you click: every page starts kept, a click cuts it (or keeps it again),
+  // shift-click does the same to the whole range since the last click.
+  function setKept(index, on) { if (on) kept.add(index); else kept.delete(index); }
+
+  function onCardActivate(index, shiftKey) {
+    const on = !kept.has(index);
+    if (shiftKey && lastClickedIndex !== null) {
+      const a = Math.min(lastClickedIndex, index), b = Math.max(lastClickedIndex, index);
+      for (let i = a; i <= b; i++) setKept(i, on);
+    } else {
+      setKept(index, on);
+    }
+    lastClickedIndex = index;
+    updateStage1State();
+  }
+
   function buildThumbCards() {
     thumbGrid.innerHTML = '';
+    kept = new Set();
+    lastClickedIndex = null;
     for (let i = 0; i < state.numPages; i++) {
       const pageNum = i + 1;
+      kept.add(i);
       const card = document.createElement('div');
       card.className = 'thumb-card';
       card.dataset.index = String(i);
+      card.tabIndex = 0;
+      card.setAttribute('role', 'checkbox');
+      card.setAttribute('aria-label', 'Keep page ' + pageNum);
+      card.addEventListener('click', e => onCardActivate(i, e.shiftKey));
+      card.addEventListener('keydown', e => {
+        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); onCardActivate(i, e.shiftKey); }
+      });
       const placeholder = document.createElement('div');
       placeholder.className = 'thumb-placeholder';
       placeholder.textContent = 'Page ' + pageNum + '\u2026';
       card.appendChild(placeholder);
       const controls = document.createElement('div');
       controls.className = 'thumb-controls';
-      const keepLabel = document.createElement('label');
-      const keepCb = document.createElement('input');
-      keepCb.type = 'checkbox';
-      keepCb.dataset.index = String(i);
-      keepCb.addEventListener('change', updateStage1State);
-      keepLabel.appendChild(keepCb);
-      keepLabel.appendChild(document.createTextNode(' Keep page ' + pageNum));
-      controls.appendChild(keepLabel);
-      const keyLabel = document.createElement('label');
-      const keyRadio = document.createElement('input');
-      keyRadio.type = 'radio';
-      keyRadio.name = 'key-page';
-      keyRadio.dataset.index = String(i);
-      keyRadio.addEventListener('change', updateStage1State);
-      keyLabel.appendChild(keyRadio);
-      keyLabel.appendChild(document.createTextNode(' Key page'));
-      controls.appendChild(keyLabel);
+      const numSpan = document.createElement('span');
+      numSpan.className = 'page-num';
+      numSpan.textContent = String(pageNum);
+      controls.appendChild(numSpan);
       const sizeSpan = document.createElement('span');
       sizeSpan.className = 'page-size';
       sizeSpan.dataset.pageSize = String(i);
-      sizeSpan.textContent = 'Analyzing\u2026';
+      sizeSpan.textContent = '\u2026';
       controls.appendChild(sizeSpan);
       card.appendChild(controls);
       thumbGrid.appendChild(card);
@@ -148,34 +165,39 @@
   }
 
   function updateStage1State() {
-    const checkboxes = thumbGrid.querySelectorAll('input[type="checkbox"]');
-    const radios = thumbGrid.querySelectorAll('input[name="key-page"]');
-    state.selectedIndices = [];
-    checkboxes.forEach((cb, i) => {
-      if (cb.checked) state.selectedIndices.push(i);
-    });
-    const checkedRadio = thumbGrid.querySelector('input[name="key-page"]:checked');
-    state.keyPageIndex = checkedRadio ? parseInt(checkedRadio.dataset.index, 10) : null;
-    if (state.keyPageIndex !== null && !state.selectedIndices.includes(state.keyPageIndex)) {
-      state.keyPageIndex = null;
-      checkedRadio.checked = false;
-    }
-    if (state.selectedIndices.length > 0 && state.keyPageIndex === null) {
-      state.keyPageIndex = state.selectedIndices[0];
-      const radioToCheck = thumbGrid.querySelector('input[name="key-page"][data-index="' + state.keyPageIndex + '"]');
-      if (radioToCheck) radioToCheck.checked = true;
-    }
-    radios.forEach(r => {
-      const idx = parseInt(r.dataset.index, 10);
-      r.disabled = !state.selectedIndices.includes(idx);
-    });
+    state.selectedIndices = Array.from(kept).sort((a, b) => a - b);
+    // The page the before / after comparison opens on: the first kept page.
+    state.keyPageIndex = state.selectedIndices.length ? state.selectedIndices[0] : null;
     thumbGrid.querySelectorAll('.thumb-card').forEach(card => {
-      const idx = parseInt(card.dataset.index, 10);
-      card.classList.toggle('selected', state.selectedIndices.includes(idx));
-      card.classList.toggle('key-page', state.keyPageIndex === idx);
+      const on = kept.has(parseInt(card.dataset.index, 10));
+      card.classList.toggle('selected', on);
+      card.classList.toggle('cut', !on);
+      card.setAttribute('aria-checked', on ? 'true' : 'false');
     });
-    const canContinue = state.selectedIndices.length > 0 && state.keyPageIndex !== null;
-    $('btn-continue-1').disabled = !canContinue;
+    const n = state.selectedIndices.length;
+    const btn = $('btn-continue-1');
+    btn.disabled = n === 0;
+    btn.textContent = n === 0 ? 'Keep at least one page' : 'Continue \u2014 ' + n + (n === 1 ? ' page' : ' pages');
+    updateKeepTotals();
+  }
+
+  // "Keeping 9 of 12 pages · 1.8 MB" in the bar; the size firms up as pages are measured.
+  function updateKeepTotals() {
+    const el = $('app-keep');
+    if (!el) return;
+    el.textContent = '';
+    if (!state.numPages || stage1.classList.contains('hidden')) return;
+    let sum = 0, known = true;
+    state.selectedIndices.forEach(i => { if (state.pageSizesBefore[i] === undefined) known = false; else sum += state.pageSizesBefore[i]; });
+    const b = document.createElement('b');
+    b.textContent = state.selectedIndices.length + ' of ' + state.numPages;
+    el.appendChild(document.createTextNode('Keeping '));
+    el.appendChild(b);
+    // Pages share fonts and images, so their separate sizes add up to more than the file;
+    // the estimate never exceeds the file itself, and the real number arrives at Download.
+    const total = state.pdfBytes ? state.pdfBytes.length : sum;
+    const est = state.selectedIndices.length === state.numPages ? total : Math.min(sum, total);
+    el.appendChild(document.createTextNode(' pages' + (state.selectedIndices.length && known ? ' \u00b7 about ' + formatBytes(est) : '')));
   }
 
   async function doFilter() {
@@ -224,14 +246,8 @@
     const el = thumbGrid.querySelector('[data-page-size="' + index + '"]');
     if (!el) return;
     const before = state.pageSizesBefore[index];
-    const after = state.pageSizesAfter[index];
-    if (before !== undefined && after !== undefined) {
-      el.textContent = formatBytes(before) + ' \u2192 ' + formatBytes(after);
-    } else if (before !== undefined) {
-      el.textContent = formatBytes(before) + ' \u2192 \u2026';
-    } else {
-      el.textContent = 'Analyzing\u2026';
-    }
+    el.textContent = before !== undefined ? formatBytes(before) : '\u2026';
+    updateKeepTotals();
   }
 
   function updateBackgroundStatus(done, total) {
@@ -241,7 +257,7 @@
       el.textContent = '';
     } else {
       el.classList.remove('hidden');
-      el.textContent = 'Compressing in background: ' + done + '/' + total + ' pages';
+      el.textContent = 'Measuring pages in the background: ' + done + ' of ' + total;
     }
   }
 
@@ -419,14 +435,15 @@
   });
 
   $('btn-select-all').addEventListener('click', () => {
-    thumbGrid.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = true; });
-    const first = thumbGrid.querySelector('input[type="radio"]');
-    if (first && !thumbGrid.querySelector('input[name="key-page"]:checked')) first.checked = true;
+    for (let i = 0; i < state.numPages; i++) kept.add(i);
     updateStage1State();
   });
   $('btn-deselect-all').addEventListener('click', () => {
-    thumbGrid.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
-    thumbGrid.querySelectorAll('input[name="key-page"]').forEach(r => { r.checked = false; });
+    kept.clear();
+    updateStage1State();
+  });
+  $('btn-invert').addEventListener('click', () => {
+    for (let i = 0; i < state.numPages; i++) setKept(i, !kept.has(i));
     updateStage1State();
   });
   $('btn-back-1').addEventListener('click', () => { showStage('drop'); });
@@ -444,6 +461,8 @@
   $('btn-compare').addEventListener('click', openKeyPagePdfs);
   $('btn-start-over').addEventListener('click', () => {
     state = { pdfDoc: null, pdfBytes: null, numPages: 0, selectedIndices: [], keyPageIndex: null, filteredPdfBytes: null, compressedPdfBytes: null, keyPageIndexInFiltered: null, keyPageIndexInCompressed: null, fileName: 'document.pdf', pageSizesBefore: [], pageSizesAfter: [], compressedPages: [], runId: 0, jpegQuality: 0.97, grayscale: false };
+    kept = new Set();
+    lastClickedIndex = null;
     showStage('drop');
   });
 })();

@@ -57,6 +57,9 @@
     .app-step.is-current { background: var(--primary); border-color: var(--primary); color: var(--accent); font-weight: 600; }
     .app-file { margin-left: auto; font-size: 0.8125rem; color: #6b6a66; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
     .app-file b { color: var(--primary); }
+    .app-keep { font-size: 0.8125rem; color: #6b6a66; white-space: nowrap; }
+    .app-keep b { color: var(--primary); font-size: 0.9375rem; }
+    .app-keep:empty { display: none; }
     @media (max-width: 640px) { .app-tag { display: none; } .app-file { margin-left: 0; width: 100%; } }
     .btn {
       padding: 0.75rem 1.25rem;
@@ -108,15 +111,22 @@
       background: #fff;
       transition: border-color 0.2s;
     }
-    .thumb-card.selected { border-color: var(--secondary); }
-    .thumb-card.key-page { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(232,197,71,0.6); }
+    .thumb-card { position: relative; cursor: pointer; user-select: none; }
+    .thumb-card:focus-visible { outline: 3px solid rgba(232,197,71,0.9); outline-offset: 2px; }
+    .thumb-card.selected { border-color: var(--primary); }
+    .thumb-card.selected::after { content: '\2713'; position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%; background: var(--primary); color: var(--accent); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+    .thumb-card.cut { opacity: 0.45; }
+    .thumb-card.cut canvas { filter: grayscale(1); }
     .thumb-card canvas { display: block; width: 100%; height: auto; }
     .thumb-card .thumb-controls {
-      padding: 0.5rem;
+      padding: 0.4rem 0.5rem;
       display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 0.8125rem;
+      color: #6b6a66;
     }
+    .thumb-card .page-num { font-weight: 600; color: var(--primary); }
     .thumb-card label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.875rem; }
     .thumb-card input[type="checkbox"], .thumb-card input[type="radio"] { margin: 0; }
     .thumb-placeholder {
@@ -128,8 +138,10 @@
       color: #999;
       font-size: 0.875rem;
     }
-    .bulk-actions { margin-bottom: 1rem; display: flex; gap: 0.5rem; }
-    .page-size { font-size: 0.75rem; color: #666; display: block; margin-top: 0.25rem; }
+    .bulk-actions { margin-bottom: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    .bulk-actions .btn { padding: 0.45rem 0.8rem; font-size: 0.875rem; }
+    .bulk-hint { font-size: 0.8125rem; color: #6b6a66; }
+    .page-size { font-size: 0.75rem; color: #666; }
     .background-status { font-size: 0.875rem; color: #666; margin-bottom: 1rem; }
     /* Stage 2: Progress */
     .progress-overlay {
@@ -182,6 +194,7 @@
         <span class="app-step" data-step="stage3"><b>3</b> Download</span>
       </div>
       <span class="app-file" id="app-file"></span>
+      <span class="app-keep" id="app-keep"></span>
     </div>
 
     <!-- Stage 0: Drop zone -->
@@ -207,10 +220,11 @@
     <!-- Stage 1: Page selection -->
     <div id="stage-1" class="section hidden">
       <h2>Pick pages</h2>
-      <p>Choose which pages to keep and pick a <strong>key page</strong> for quality comparison after compression.</p>
       <div class="bulk-actions">
-        <button type="button" class="btn btn-secondary" id="btn-select-all">Select All</button>
-        <button type="button" class="btn btn-secondary" id="btn-deselect-all">Deselect All</button>
+        <button type="button" class="btn btn-secondary" id="btn-select-all">Keep all</button>
+        <button type="button" class="btn btn-secondary" id="btn-deselect-all">Keep none</button>
+        <button type="button" class="btn btn-secondary" id="btn-invert">Invert</button>
+        <span class="bulk-hint">Every page starts kept. Click a page to cut it · shift-click for a range.</span>
       </div>
       <div id="background-status" class="background-status hidden"></div>
       <div id="thumb-grid" class="thumb-grid"></div>
