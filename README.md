@@ -4,18 +4,11 @@ A PDF stripper: a client-side PDF tool that lets you select pages, compress, and
 
 ## Usage
 
-1. **Drop a PDF** onto the page or click to choose a file.
-2. **Set options** (before upload): Choose quality preserved (90–99%, higher = larger files) and optionally enable grayscale for smaller output.
-3. **Stage 1 – Select pages**: Choose which pages to keep and pick a key page for quality comparison. Compression runs in the background; each thumbnail shows before/after size as it completes.
-4. **Stage 2 – Compress** (if needed): If you continue before background compression finishes, remaining pages compress on demand.
-5. **Stage 3 – Download**: Download the compressed PDF and optionally compare the key page before/after in side-by-side windows.
-
-## Features
-
-- **Quality slider**: 90–99% JPEG quality (default 97%)
-- **Grayscale option**: Convert to grayscale for smaller files (typically 20–40% reduction on text/scanned docs)
-- **Background compression**: Starts as soon as you upload; per-page before/after sizes appear on thumbnails
-- **Key page comparison**: Open before/after views in a new window
+1. **Choose a PDF** — drop it on the page or click to pick one. Nothing is uploaded.
+2. **Pick pages** — every page starts kept. Click a page to cut it (shift-click for a range), or use *Keep all · Keep none · Invert*. Pages are measured and shrunk in the background while you pick.
+3. **Download** — two files, with a word on which suits this PDF:
+   - **Just these pages** — the kept pages exactly as they are: sharp, selectable, searchable. (`name-pages-1-3_5.pdf`)
+   - **Shrink it** — every page re-drawn as a JPEG. Good for scans and phone photos; a PDF that is already text usually gets *bigger* and loses its selectable text, and the app says so. Quality (90–99%, default 97%) and grayscale live here and re-estimate as you change them; *Compare before / after* opens the chosen page side by side. (`name-small.pdf`)
 
 ## Deployment
 
