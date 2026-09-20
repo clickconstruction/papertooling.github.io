@@ -1,6 +1,6 @@
-# PDF Tooling
+# PaperTooling
 
-A client-side PDF tool that lets you select pages, compress, and download. All processing happens in your browser—files never leave your device.
+A PDF stripper: a client-side PDF tool that lets you select pages, compress, and download. All processing happens in your browser—files never leave your device.
 
 ## Usage
 
