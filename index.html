@@ -94,8 +94,9 @@
     .drop-zone p { margin: 0.5rem 0; color: #666; }
     .drop-zone .drop-icon { font-size: 3rem; color: var(--secondary); margin-bottom: 0.5rem; }
     .privacy-note { margin: 0.75rem 0 0; font-size: 0.875rem; color: #6b6a66; text-align: center; }
-    .quality-control { display: flex; flex-direction: column; gap: 0.5rem; margin: 1rem 0; font-size: 0.875rem; color: #666; }
-    .quality-control input[type="range"] { width: 100%; max-width: 200px; margin: 0 auto; accent-color: var(--secondary); }
+    .quality-control { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.875rem; color: #666; }
+    .quality-control input[type="range"] { width: 100%; max-width: 260px; accent-color: var(--primary); }
+    .quality-hint { color: #8a8880; }
     .grayscale-option { display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; color: #666; cursor: pointer; }
     .grayscale-option input { margin: 0; }
     /* Stage 1: Thumbnails */
@@ -174,8 +175,22 @@
       transition: width 0.2s;
     }
     /* Stage 3 */
-    .result-summary { margin-bottom: 1rem; padding: 1rem; background: var(--bg); border-radius: 8px; }
-    .result-summary p { margin: 0.25rem 0; }
+    .dl-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+    .dl-option { display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem; padding: 1.125rem; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
+    .dl-option.is-best { border: 2px solid var(--primary); }
+    .dl-option h3 { margin: 0; font-size: 1.125rem; }
+    .dl-option p { margin: 0; color: #6b6a66; font-size: 0.875rem; }
+    .dl-option .btn { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+    .dl-tag { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #1f5a36; }
+    .dl-tag.is-bad { color: #b3261e; }
+    .dl-tag.is-quiet { color: #6b6a66; }
+    .dl-size { font-size: 1.75rem; font-weight: 700; color: var(--primary); font-variant-numeric: tabular-nums; }
+    .dl-size.is-bad { color: #b3261e; }
+    .compare-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .compare-row .btn { padding: 0.45rem 0.8rem; font-size: 0.875rem; }
+    .compare-pick { font-size: 0.875rem; color: #6b6a66; display: flex; align-items: center; gap: 0.35rem; }
+    .compare-pick select { font: inherit; padding: 0.3rem 0.4rem; border: 1px solid #cfccc2; border-radius: 6px; background: #fff; }
+    @media (max-width: 700px) { .dl-options { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -204,14 +219,6 @@
         <div class="drop-icon">&#128196;</div>
         <p><strong>Drop a PDF here</strong> or click to choose a file</p>
         <p style="font-size: 0.875rem;">Supported: PDF files</p>
-        <div class="quality-control">
-          <label for="quality-slider">Quality preserved (higher = larger files): <span id="quality-value">97</span>%</label>
-          <input type="range" id="quality-slider" min="90" max="99" value="97" step="1">
-        </div>
-        <label class="grayscale-option">
-          <input type="checkbox" id="grayscale-checkbox">
-          Convert to grayscale (smaller files)
-        </label>
         <input type="file" id="file-input" accept="application/pdf" style="display: none;">
       </div>
       <p class="privacy-note">Nothing is uploaded. The PDF is opened, trimmed and saved inside this browser tab.</p>
@@ -238,7 +245,7 @@
     <!-- Stage 2: Compression (progress overlay) -->
     <div id="stage-2-overlay" class="progress-overlay hidden">
       <div class="progress-box">
-        <h3>Compressing PDF</h3>
+        <h3>Getting both versions ready</h3>
         <p id="progress-text">Preparing...</p>
         <div class="progress-bar">
           <div id="progress-fill" class="progress-bar-fill" style="width: 0%"></div>
@@ -249,11 +256,37 @@
     <!-- Stage 3: Download -->
     <div id="stage-3" class="section hidden">
       <h2>Download</h2>
-      <div id="result-summary" class="result-summary"></div>
+      <div class="dl-options">
+        <div class="dl-option" id="opt-pages">
+          <span class="dl-tag" id="tag-pages"></span>
+          <h3>Just these pages</h3>
+          <div class="dl-size" id="size-pages"></div>
+          <p>The pages exactly as they are — text stays sharp, selectable and searchable. Nothing is re-drawn.</p>
+          <button type="button" class="btn" id="btn-download-pages">Download</button>
+        </div>
+        <div class="dl-option" id="opt-shrink">
+          <span class="dl-tag" id="tag-shrink"></span>
+          <h3>Shrink it</h3>
+          <div class="dl-size" id="size-shrink"></div>
+          <p>Re-draws each page as a picture. That helps scans and phone photos; a PDF that is already text usually grows, and its text stops being selectable.</p>
+          <div class="quality-control">
+            <label for="quality-slider">Quality kept: <span id="quality-value">97</span>% <span class="quality-hint">(lower = smaller)</span></label>
+            <input type="range" id="quality-slider" min="90" max="99" value="97" step="1">
+          </div>
+          <label class="grayscale-option">
+            <input type="checkbox" id="grayscale-checkbox">
+            Grayscale (smaller still)
+          </label>
+          <button type="button" class="btn" id="btn-download">Download</button>
+          <div class="compare-row">
+            <button type="button" class="btn btn-secondary" id="btn-compare">Compare before / after</button>
+            <label class="compare-pick">on <select id="compare-page" aria-label="Page to compare"></select></label>
+          </div>
+        </div>
+      </div>
       <div class="actions">
-        <button type="button" class="btn" id="btn-download">Download Compressed PDF</button>
-        <button type="button" class="btn btn-secondary" id="btn-compare">Compare Key Page (Before vs After)</button>
-        <button type="button" class="btn btn-secondary" id="btn-start-over">Start Over</button>
+        <button type="button" class="btn btn-secondary" id="btn-back-3">Back to pages</button>
+        <button type="button" class="btn btn-secondary" id="btn-start-over">Start over</button>
       </div>
     </div>
   </div>

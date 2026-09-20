@@ -37,7 +37,6 @@
   const thumbGrid = $('thumb-grid');
   const progressText = $('progress-text');
   const progressFill = $('progress-fill');
-  const resultSummary = $('result-summary');
 
   function showStage(name) {
     stageDrop.classList.toggle('hidden', name !== 'drop');
@@ -218,6 +217,10 @@
     return bytes.length;
   }
 
+  // A shrunk page is only good for the settings it was drawn with.
+  function settingsKey() { return state.jpegQuality + '|' + (state.grayscale ? 'g' : 'c'); }
+  function isFresh(index) { const cp = state.compressedPages[index]; return !!cp && cp.key === settingsKey(); }
+
   async function compressPage(index) {
     const page = await state.pdfDoc.getPage(index + 1);
     const viewport = page.getViewport({ scale: 2 });
@@ -239,7 +242,7 @@
     const jpegDataUri = outputCanvas.toDataURL('image/jpeg', state.jpegQuality);
     const blob = await (await fetch(jpegDataUri)).blob();
     const size = blob.size;
-    return { dataUri: jpegDataUri, viewport: { width: viewport.width, height: viewport.height }, size };
+    return { dataUri: jpegDataUri, viewport: { width: viewport.width, height: viewport.height }, size, key: settingsKey() };
   }
 
   function updatePageSizeDisplay(index) {
@@ -306,39 +309,125 @@
   async function assembleAndContinue() {
     await doFilter();
     const selectedIndices = state.selectedIndices;
-    const missing = selectedIndices.filter(i => !state.compressedPages[i]);
-    if (missing.length === 0) {
-      await assembleCompressedPdf(selectedIndices);
-      const origSize = state.filteredPdfBytes.length;
-      const compSize = state.compressedPdfBytes.length;
-      const pct = origSize > 0 ? Math.round((1 - compSize / origSize) * 100) : 0;
-      resultSummary.innerHTML = '<p><strong>Original (filtered):</strong> ' + formatBytes(origSize) + '</p><p><strong>Compressed:</strong> ' + formatBytes(compSize) + '</p><p><strong>Reduction:</strong> ' + pct + '%</p>';
-      showStage('stage3');
-      return;
-    }
-    showStage('stage2');
-    const total = missing.length;
-    for (let j = 0; j < total; j++) {
-      const idx = missing[j];
-      progressText.textContent = 'Compressing remaining page ' + (j + 1) + ' of ' + total + '...';
-      progressFill.style.width = (((j + 1) / total) * 100) + '%';
-      await new Promise(r => setTimeout(r, 0));
-      if (state.pageSizesBefore[idx] === undefined) {
-        try {
-          state.pageSizesBefore[idx] = await getPageSizeBefore(idx);
-        } catch (e) {}
+    const missing = selectedIndices.filter(i => !isFresh(i));
+    if (missing.length > 0) {
+      showStage('stage2');
+      const total = missing.length;
+      for (let j = 0; j < total; j++) {
+        const idx = missing[j];
+        progressText.textContent = 'Measuring page ' + (j + 1) + ' of ' + total + '...';
+        progressFill.style.width = (((j + 1) / total) * 100) + '%';
+        await new Promise(r => setTimeout(r, 0));
+        if (state.pageSizesBefore[idx] === undefined) {
+          try {
+            state.pageSizesBefore[idx] = await getPageSizeBefore(idx);
+          } catch (e) {}
+        }
+        const result = await compressPage(idx);
+        state.compressedPages[idx] = result;
+        state.pageSizesAfter[idx] = result.size;
+        updatePageSizeDisplay(idx);
       }
-      const result = await compressPage(idx);
-      state.compressedPages[idx] = result;
-      state.pageSizesAfter[idx] = result.size;
-      updatePageSizeDisplay(idx);
     }
     await assembleCompressedPdf(selectedIndices);
-    const origSize = state.filteredPdfBytes.length;
-    const compSize = state.compressedPdfBytes.length;
-    const pct = origSize > 0 ? Math.round((1 - compSize / origSize) * 100) : 0;
-    resultSummary.innerHTML = '<p><strong>Original (filtered):</strong> ' + formatBytes(origSize) + '</p><p><strong>Compressed:</strong> ' + formatBytes(compSize) + '</p><p><strong>Reduction:</strong> ' + pct + '%</p>';
+    renderDownloadStage();
     showStage('stage3');
+  }
+
+  // "1-3_5_8-9" for a file name; a long list becomes a count.
+  function pageRangeLabel(indices) {
+    if (indices.length === state.numPages) return 'all-pages';
+    const parts = [];
+    let a = null, b = null;
+    indices.forEach(i => {
+      const n = i + 1;
+      if (a === null) { a = b = n; } else if (n === b + 1) { b = n; } else { parts.push(a === b ? String(a) : a + '-' + b); a = b = n; }
+    });
+    if (a !== null) parts.push(a === b ? String(a) : a + '-' + b);
+    const label = parts.join('_');
+    return label.length <= 30 ? 'pages-' + label : indices.length + '-pages';
+  }
+
+  // Step 3: two downloads, and an honest word on which one suits THIS PDF. Shrinking re-draws
+  // each page as a JPEG: good for scans and photos, bad for a PDF that is already text.
+  function renderDownloadStage() {
+    const orig = state.filteredPdfBytes.length;
+    const comp = state.compressedPdfBytes.length;
+    const shrinkWins = comp < orig * 0.95;
+    $('size-pages').textContent = formatBytes(orig);
+    $('size-shrink').textContent = formatBytes(comp);
+    const tagPages = $('tag-pages'), tagShrink = $('tag-shrink');
+    const ratio = orig > 0 ? comp / orig : 1;
+    if (shrinkWins) {
+      tagShrink.textContent = 'Best for this PDF \u00b7 ' + Math.round((1 - ratio) * 100) + '% smaller';
+      tagPages.textContent = 'Untouched';
+    } else {
+      tagPages.textContent = 'Best for this PDF';
+      tagShrink.textContent = ratio >= 1.5 ? 'Not worth it here \u00b7 ' + (ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)) + '\u00d7 bigger' : ratio > 1.05 ? 'Not worth it here \u00b7 bigger' : 'Not worth it here \u00b7 about the same';
+    }
+    tagShrink.classList.toggle('is-bad', !shrinkWins);
+    tagPages.classList.toggle('is-quiet', shrinkWins);
+    $('opt-pages').classList.toggle('is-best', !shrinkWins);
+    $('opt-shrink').classList.toggle('is-best', shrinkWins);
+    $('size-shrink').classList.toggle('is-bad', !shrinkWins);
+    $('btn-download-pages').classList.toggle('btn-secondary', shrinkWins);
+    $('btn-download').classList.toggle('btn-secondary', !shrinkWins);
+    const label = pageRangeLabel(state.selectedIndices);
+    $('btn-download-pages').textContent = 'Download ' + state.fileName + '-' + label + '.pdf';
+    $('btn-download').textContent = (shrinkWins ? 'Download ' : 'Download anyway \u00b7 ') + state.fileName + '-small.pdf';
+    const select = $('compare-page');
+    const current = state.keyPageIndex;
+    select.innerHTML = '';
+    state.selectedIndices.forEach(i => {
+      const o = document.createElement('option');
+      o.value = String(i);
+      o.textContent = 'page ' + (i + 1);
+      if (i === current) o.selected = true;
+      select.appendChild(o);
+    });
+    setComparePage(parseInt(select.value, 10));
+  }
+
+  function setComparePage(index) {
+    state.keyPageIndex = index;
+    state.keyPageIndexInFiltered = state.selectedIndices.indexOf(index);
+    state.keyPageIndexInCompressed = state.selectedIndices.indexOf(index);
+  }
+
+  // Quality or grayscale changed at step 3: re-draw the kept pages with the new settings.
+  let reshrinkTimer = null;
+  let reshrinkRun = 0;
+  function scheduleReshrink() {
+    if (stage3.classList.contains('hidden')) return;
+    if (reshrinkTimer) clearTimeout(reshrinkTimer);
+    reshrinkTimer = setTimeout(reshrink, 400);
+  }
+  async function reshrink() {
+    const run = ++reshrinkRun;
+    state.runId = Date.now(); // stops any background pass still drawing at the old settings
+    const indices = state.selectedIndices.slice();
+    const sizeEl = $('size-shrink');
+    $('btn-download').disabled = true;
+    $('btn-compare').disabled = true;
+    try {
+      for (let j = 0; j < indices.length; j++) {
+        if (run !== reshrinkRun) return;
+        if (isFresh(indices[j])) continue;
+        sizeEl.textContent = 'Working\u2026 page ' + (j + 1) + ' of ' + indices.length;
+        await new Promise(r => setTimeout(r, 0));
+        const result = await compressPage(indices[j]);
+        if (run !== reshrinkRun) return;
+        state.compressedPages[indices[j]] = result;
+        state.pageSizesAfter[indices[j]] = result.size;
+      }
+      await assembleCompressedPdf(indices);
+      if (run !== reshrinkRun) return;
+      renderDownloadStage();
+    } catch (err) {
+      sizeEl.textContent = 'Could not shrink this PDF.';
+    } finally {
+      if (run === reshrinkRun) { $('btn-download').disabled = false; $('btn-compare').disabled = false; }
+    }
   }
 
   function formatBytes(n) {
@@ -388,14 +477,12 @@
     const headerQuality = $('header-quality');
     if (headerQuality) headerQuality.textContent = val;
   }
-  qualitySlider.addEventListener('input', updateQualityDisplay);
+  qualitySlider.addEventListener('input', () => { updateQualityDisplay(); scheduleReshrink(); });
+  $('grayscale-checkbox').addEventListener('change', () => { state.grayscale = $('grayscale-checkbox').checked; scheduleReshrink(); });
   updateQualityDisplay();
   showStage('drop');
 
-  dropZone.addEventListener('click', (e) => {
-    if (e.target.closest('.quality-control') || e.target.closest('.grayscale-option')) return;
-    fileInput.click();
-  });
+  dropZone.addEventListener('click', () => { fileInput.click(); });
   dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
   dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
   async function handlePdfFile(file) {
@@ -456,11 +543,17 @@
   });
   $('btn-download').addEventListener('click', () => {
     const blob = new Blob([state.compressedPdfBytes], { type: 'application/pdf' });
-    downloadBlob(blob, state.fileName + '-compressed.pdf');
+    downloadBlob(blob, state.fileName + '-small.pdf');
   });
+  $('btn-download-pages').addEventListener('click', () => {
+    const blob = new Blob([state.filteredPdfBytes], { type: 'application/pdf' });
+    downloadBlob(blob, state.fileName + '-' + pageRangeLabel(state.selectedIndices) + '.pdf');
+  });
+  $('compare-page').addEventListener('change', e => setComparePage(parseInt(e.target.value, 10)));
   $('btn-compare').addEventListener('click', openKeyPagePdfs);
+  $('btn-back-3').addEventListener('click', () => { showStage('stage1'); });
   $('btn-start-over').addEventListener('click', () => {
-    state = { pdfDoc: null, pdfBytes: null, numPages: 0, selectedIndices: [], keyPageIndex: null, filteredPdfBytes: null, compressedPdfBytes: null, keyPageIndexInFiltered: null, keyPageIndexInCompressed: null, fileName: 'document.pdf', pageSizesBefore: [], pageSizesAfter: [], compressedPages: [], runId: 0, jpegQuality: 0.97, grayscale: false };
+    state = { pdfDoc: null, pdfBytes: null, numPages: 0, selectedIndices: [], keyPageIndex: null, filteredPdfBytes: null, compressedPdfBytes: null, keyPageIndexInFiltered: null, keyPageIndexInCompressed: null, fileName: 'document.pdf', pageSizesBefore: [], pageSizesAfter: [], compressedPages: [], runId: 0, jpegQuality: parseInt(qualitySlider.value, 10) / 100, grayscale: $('grayscale-checkbox').checked };
     kept = new Set();
     lastClickedIndex = null;
     showStage('drop');
