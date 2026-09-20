@@ -6,16 +6,17 @@
   <link rel="icon" href="favicon.ico" sizes="32x32">
   <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-180.png">
-  <title>PDF Tooling - Select, Compress, Download</title>
+  <title>PaperTooling — PDF stripper</title>
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     :root {
-      --primary: #003366;
-      --secondary: #0066CC;
-      --bg: #F5F5F5;
-      --text: #333333;
+      --primary: #161617;
+      --secondary: #161617;
+      --accent: #e8c547;
+      --bg: #f6f5f1;
+      --text: #2b2a28;
       --card-bg: #ffffff;
       --border: #ddd;
       --error: #c00;
@@ -32,7 +33,7 @@
     }
     .container { max-width: 960px; margin: 0 auto; }
     h1, h2, h3 { color: var(--primary); margin-top: 0; }
-    h2 { font-size: 1.25rem; border-bottom: 2px solid var(--secondary); padding-bottom: 0.25rem; margin-bottom: 1rem; }
+    h2 { font-size: 1.25rem; border-bottom: 2px solid var(--accent); padding-bottom: 0.25rem; margin-bottom: 1rem; }
     .section {
       background: var(--card-bg);
       border-radius: 8px;
@@ -41,6 +42,22 @@
       box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     }
     .hidden { display: none !important; }
+    /* The header and the three steps — the same shell the rest of the Tooling family wears. */
+    .app-top-bar { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; padding: 0.75rem 1rem; background: var(--primary); color: #fff; border-radius: 10px; }
+    .app-mark { width: 40px; height: 40px; border-radius: 9px; flex-shrink: 0; }
+    .app-title { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+    .app-name { font-size: 1.125rem; font-weight: 700; }
+    .app-tag { font-size: 0.8125rem; color: #bdbbb3; }
+    .app-steps-bar { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 0.35rem 1rem; flex-wrap: wrap; margin: 0 0 1rem; padding: 0.5rem 0.75rem; background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    .app-steps { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+    .app-step { padding: 0.3rem 0.75rem; border: 1px solid var(--border); border-radius: 999px; color: #6b6a66; font-size: 0.8125rem; white-space: nowrap; }
+    .app-step b { margin-right: 0.15rem; }
+    .app-step.is-done::before { content: '\2713\00a0'; color: #2f7d4f; }
+    .app-step.is-done b { display: none; }
+    .app-step.is-current { background: var(--primary); border-color: var(--primary); color: var(--accent); font-weight: 600; }
+    .app-file { margin-left: auto; font-size: 0.8125rem; color: #6b6a66; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+    .app-file b { color: var(--primary); }
+    @media (max-width: 640px) { .app-tag { display: none; } .app-file { margin-left: 0; width: 100%; } }
     .btn {
       padding: 0.75rem 1.25rem;
       border: none;
@@ -49,13 +66,13 @@
       font-weight: 600;
       cursor: pointer;
       transition: background 0.2s;
-      background: var(--secondary);
-      color: #fff;
+      background: var(--primary);
+      color: var(--accent);
     }
-    .btn:hover:not(:disabled) { background: #0052a3; }
-    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-    .btn-secondary { background: #666; }
-    .btn-secondary:hover:not(:disabled) { background: #555; }
+    .btn:hover:not(:disabled) { background: #2a2a2c; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-secondary { background: #fff; color: var(--primary); border: 1px solid #cfccc2; font-weight: 500; }
+    .btn-secondary:hover:not(:disabled) { background: var(--bg); border-color: #a9a69b; }
     .btn-error { background: var(--error); }
     .btn-error:hover:not(:disabled) { background: #a00; }
     .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1rem; align-items: center; }
@@ -70,9 +87,10 @@
       cursor: pointer;
       transition: border-color 0.2s, background 0.2s;
     }
-    .drop-zone:hover, .drop-zone.dragover { border-color: var(--secondary); background: #f0f7ff; }
+    .drop-zone:hover, .drop-zone.dragover { border-color: var(--primary); background: #fdf8e3; }
     .drop-zone p { margin: 0.5rem 0; color: #666; }
     .drop-zone .drop-icon { font-size: 3rem; color: var(--secondary); margin-bottom: 0.5rem; }
+    .privacy-note { margin: 0.75rem 0 0; font-size: 0.875rem; color: #6b6a66; text-align: center; }
     .quality-control { display: flex; flex-direction: column; gap: 0.5rem; margin: 1rem 0; font-size: 0.875rem; color: #666; }
     .quality-control input[type="range"] { width: 100%; max-width: 200px; margin: 0 auto; accent-color: var(--secondary); }
     .grayscale-option { display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; color: #666; cursor: pointer; }
@@ -91,7 +109,7 @@
       transition: border-color 0.2s;
     }
     .thumb-card.selected { border-color: var(--secondary); }
-    .thumb-card.key-page { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(0,51,102,0.3); }
+    .thumb-card.key-page { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(232,197,71,0.6); }
     .thumb-card canvas { display: block; width: 100%; height: auto; }
     .thumb-card .thumb-controls {
       padding: 0.5rem;
@@ -144,14 +162,27 @@
       transition: width 0.2s;
     }
     /* Stage 3 */
-    .result-summary { margin-bottom: 1rem; padding: 1rem; background: #f0f7ff; border-radius: 8px; }
+    .result-summary { margin-bottom: 1rem; padding: 1rem; background: var(--bg); border-radius: 8px; }
     .result-summary p { margin: 0.25rem 0; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>PDF Tooling</h1>
-    <p>Select pages, compress at <span id="header-quality">97</span>% quality, and download. All processing happens in your browser—files never leave your device.</p>
+    <header class="app-top-bar">
+      <img class="app-mark" src="icons/favicon.svg" alt="" width="40" height="40">
+      <div class="app-title">
+        <span class="app-name">PaperTooling</span>
+        <span class="app-tag">PDF stripper · keep the pages you need, shrink the file · Click Plumbing and Electrical</span>
+      </div>
+    </header>
+    <div class="app-steps-bar">
+      <div class="app-steps" aria-label="Steps">
+        <span class="app-step" data-step="drop"><b>1</b> Choose a PDF</span>
+        <span class="app-step" data-step="stage1"><b>2</b> Pick pages</span>
+        <span class="app-step" data-step="stage3"><b>3</b> Download</span>
+      </div>
+      <span class="app-file" id="app-file"></span>
+    </div>
 
     <!-- Stage 0: Drop zone -->
     <div id="stage-drop" class="section">
@@ -170,11 +201,12 @@
         </label>
         <input type="file" id="file-input" accept="application/pdf" style="display: none;">
       </div>
+      <p class="privacy-note">Nothing is uploaded. The PDF is opened, trimmed and saved inside this browser tab.</p>
     </div>
 
     <!-- Stage 1: Page selection -->
     <div id="stage-1" class="section hidden">
-      <h2>Stage 1: Select Pages</h2>
+      <h2>Pick pages</h2>
       <p>Choose which pages to keep and pick a <strong>key page</strong> for quality comparison after compression.</p>
       <div class="bulk-actions">
         <button type="button" class="btn btn-secondary" id="btn-select-all">Select All</button>
@@ -202,7 +234,7 @@
 
     <!-- Stage 3: Download -->
     <div id="stage-3" class="section hidden">
-      <h2>Stage 3: Download & Compare</h2>
+      <h2>Download</h2>
       <div id="result-summary" class="result-summary"></div>
       <div class="actions">
         <button type="button" class="btn" id="btn-download">Download Compressed PDF</button>

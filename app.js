@@ -41,6 +41,24 @@
     stage1.classList.toggle('hidden', name !== 'stage1');
     stage2Overlay.classList.toggle('hidden', name !== 'stage2');
     stage3.classList.toggle('hidden', name !== 'stage3');
+    // The step pills: stage 2 is the brief "compressing" overlay on the way to step 3.
+    const order = ['drop', 'stage1', 'stage3'];
+    const at = order.indexOf(name === 'stage2' ? 'stage3' : name);
+    document.querySelectorAll('.app-step').forEach(el => {
+      const i = order.indexOf(el.dataset.step);
+      el.classList.toggle('is-current', i === at);
+      el.classList.toggle('is-done', i < at);
+    });
+    const fileEl = $('app-file');
+    if (fileEl) {
+      fileEl.textContent = '';
+      if (name !== 'drop' && state.pdfBytes) {
+        const b = document.createElement('b');
+        b.textContent = state.fileName + '.pdf';
+        fileEl.appendChild(b);
+        fileEl.appendChild(document.createTextNode(' \u00b7 ' + state.numPages + (state.numPages === 1 ? ' page' : ' pages') + ' \u00b7 ' + formatBytes(state.pdfBytes.length)));
+      }
+    }
   }
 
   function setError(el, msg) {
@@ -356,6 +374,7 @@
   }
   qualitySlider.addEventListener('input', updateQualityDisplay);
   updateQualityDisplay();
+  showStage('drop');
 
   dropZone.addEventListener('click', (e) => {
     if (e.target.closest('.quality-control') || e.target.closest('.grayscale-option')) return;
