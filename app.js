@@ -352,6 +352,27 @@
 
   function fileMetaText(src) { return src.loading ? 'Opening…' : src.error ? src.error : groupMeta(src); }
 
+  // A file's name, like its picture, opens Pick pages at that file once the file has opened.
+  function makeOpener(nameEl, src) {
+    if (src.loading || src.error) return;
+    nameEl.classList.add('is-open');
+    nameEl.setAttribute('role', 'button');
+    nameEl.setAttribute('aria-label', src.fileName + ' — see its ' + (src.numPages === 1 ? 'page' : src.numPages + ' pages'));
+    nameEl.title = 'See the pages of ' + src.fileName;
+    nameEl.tabIndex = 0;
+    nameEl.dataset.act = 'open';
+    nameEl.addEventListener('click', () => openPagesOf(src.id));
+    nameEl.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPagesOf(src.id); } });
+  }
+
+  function openPagesOf(sid) {
+    const src = sourceById(sid);
+    if (!src || src.loading || src.error) return;
+    startPicking(sid);
+    const at = state.pages.findIndex(pg => pg.s === sid);
+    if (at >= 0) announce('Pick pages. ' + src.fileName + ' starts at page ' + (at + 1) + ' of ' + state.pages.length + '.');
+  }
+
   function fileControls(src, i) {
     const cards = filesView !== 'list';
     const ctl = el('div', 'file-controls');
@@ -408,6 +429,7 @@
     row.appendChild(el('span', 'file-num', String(i + 1)));
     const name = el('span', 'file-name', src.fileName);
     name.title = src.fileName;
+    makeOpener(name, src);
     row.appendChild(name);
     const metaEl = el('span', 'file-meta', fileMetaText(src));
     if (src.libError) metaEl.title = 'This file has ' + src.libError + '.';
@@ -420,7 +442,12 @@
     const card = el('div', 'file-item file-card' + (src.error ? ' is-error' : '') + (src.numPages > 1 ? ' is-stack' : ''));
     card.dataset.sid = String(src.id);
     const cover = el('div', 'file-cover');
-    if (!src.loading && !src.error) cover.title = 'Drag to reorder';
+    const opens = !src.loading && !src.error;
+    if (opens) {
+      cover.classList.add('is-open');
+      cover.title = 'See the pages of ' + src.fileName;
+      cover.addEventListener('click', () => openPagesOf(src.id));
+    }
     const cached = coverCache.get(src.id);
     if (cached) {
       cover.appendChild(cached);
@@ -430,8 +457,9 @@
       const ph = el('div', 'thumb-placeholder ' + (aspect >= 1.18 ? 'is-wide' : 'is-tall'), src.loading ? 'Opening…' : src.error ? 'Could not open' : 'Page 1…');
       ph.style.aspectRatio = String(aspect);
       cover.appendChild(ph);
-      if (!src.loading && !src.error) { if (coverObserver) coverObserver.observe(card); else coverQueue.push(card); }
+      if (opens) { if (coverObserver) coverObserver.observe(card); else coverQueue.push(card); }
     }
+    if (opens) { const tip = el('span', 'file-open-hint', 'See pages'); tip.setAttribute('aria-hidden', 'true'); cover.appendChild(tip); }
     card.appendChild(cover);
     const body = el('div', 'file-body');
     const badge = el('span', 'file-badge');
@@ -440,6 +468,7 @@
     body.appendChild(badge);
     const name = el('div', 'file-name', src.fileName);
     name.title = src.fileName;
+    makeOpener(name, src);
     body.appendChild(name);
     const metaEl = el('div', 'file-meta', fileMetaText(src).replace(/(\d) (pages?|[KMG]?B)\b/g, '$1 $2'));
     if (src.libError) metaEl.title = 'This file has ' + src.libError + '.';
@@ -531,7 +560,7 @@
     $('files-warn').textContent = warns.join(' ');
     const btn = $('btn-continue-files');
     btn.disabled = loading || !good.length;
-    btn.textContent = loading ? 'Opening…' : !good.length ? 'No PDF to continue with' : 'Continue — ' + pages + (pages === 1 ? ' page' : ' pages');
+    btn.textContent = loading ? 'Opening…' : !good.length ? 'No PDF to continue with' : 'Continue — ' + (pages === 1 ? '1 page' : 'all ' + pages + ' pages');
     $('btn-sort-files').disabled = state.sources.length < 2;
     updateFileBar();
   }
@@ -540,7 +569,7 @@
     const items = filesList.querySelectorAll('.file-item');
     if (!items.length) { $('btn-add-files').focus(); return; }
     const item = items[Math.max(0, Math.min(index, items.length - 1))];
-    let btn = act ? item.querySelector('button[data-act="' + act + '"]') : null;
+    let btn = act ? item.querySelector('[data-act="' + act + '"]') : null;
     if (!btn || btn.disabled) btn = Array.from(item.querySelectorAll('button')).find(b => !b.disabled);
     (btn || $('btn-add-files')).focus();
   }
@@ -578,15 +607,33 @@
 
   // ---- Pages: pick the ones to keep ---------------------------------------------------------
 
-  function startPicking() {
+  // With a file id (a file clicked in step 2) the grid opens at that file's first page.
+  function startPicking(sid) {
     clearNotes();
     marked.clear();
     setError($('stage1-error'), '');
     buildPages();
+    const first = sid === undefined ? null : state.pages.find(pg => pg.s === sid);
+    if (first) pendingFocusKey = pageKey(first);
     buildThumbCards();
     updateStage1State();
-    showStage('stage1');
+    showStage('stage1', !first);
+    if (first) revealPage(pageKey(first));
     runBackgroundWork();
+  }
+
+  // Scroll so the page's file header (or the page itself) sits just under the steps bar, unless
+  // it is already on the first screen, and put focus on the page.
+  function revealPage(key) {
+    const cell = thumbGrid.querySelector('.thumb-cell[data-key="' + key + '"]');
+    if (!cell) return;
+    const prev = cell.previousElementSibling;
+    const target = prev && prev.classList.contains('thumb-group') ? prev : cell;
+    const bar = document.querySelector('.app-steps-bar');
+    const top = target.getBoundingClientRect().top + window.scrollY - (bar ? bar.offsetHeight : 0) - 12;
+    window.scrollTo(0, top > window.innerHeight / 2 ? top : 0);
+    const card = cell.querySelector('.thumb-card');
+    if (card) card.focus({ preventScroll: true });
   }
 
   // The pages start in file order. Once she has moved pages by hand, the moved ones ("pinned")
@@ -1705,7 +1752,7 @@
   document.querySelectorAll('.view-switch button').forEach(b => b.addEventListener('click', () => setFilesView(b.dataset.view)));
   applyFilesView();
   $('btn-start-over-files').addEventListener('click', () => startOver(false));
-  $('btn-continue-files').addEventListener('click', startPicking);
+  $('btn-continue-files').addEventListener('click', () => startPicking());
 
   $('btn-select-all').addEventListener('click', () => { state.cut.clear(); updateStage1State(); });
   $('btn-deselect-all').addEventListener('click', () => { state.pages.forEach(pg => state.cut.add(pageKey(pg))); updateStage1State(); });

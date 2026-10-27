@@ -139,7 +139,7 @@
     .file-card.is-error { border-color: #e2b4b0; background: #fff7f6; }
     /* Every cover is a box of one height with the sheet centred in it, so wide plan sheets and
        portrait reports make cards of one height. A file with several pages shows as a stack. */
-    .file-cover { height: 150px; margin: 0.75rem 0.75rem 0.6rem; display: flex; align-items: center; justify-content: center; }
+    .file-cover { position: relative; height: 150px; margin: 0.75rem 0.75rem 0.6rem; display: flex; align-items: center; justify-content: center; }
     @media (max-width: 480px) { .file-cover { height: 130px; } }
     .file-cover canvas, .file-cover .thumb-placeholder { margin: 0 9px 9px 0; max-width: calc(100% - 9px); max-height: calc(100% - 9px); background: #fff; box-shadow: 0 0 0 1px var(--border); }
     .file-card.is-stack .file-cover canvas, .file-card.is-stack .file-cover .thumb-placeholder { box-shadow: 0 0 0 1px var(--border), 4px 4px 0 #fff, 4px 4px 0 1px var(--border), 8px 8px 0 #fff, 8px 8px 0 1px var(--border); }
@@ -147,6 +147,13 @@
     .file-cover .thumb-placeholder { font-size: 0.8125rem; background: #eee; }
     .file-cover .thumb-placeholder.is-wide { width: calc(100% - 9px); }
     .file-cover .thumb-placeholder.is-tall { height: calc(100% - 9px); }
+    /* The picture and the name open Pick pages at that file */
+    .file-cover.is-open { cursor: pointer; }
+    .file-name.is-open { cursor: pointer; border-radius: 4px; }
+    .file-name.is-open:hover { text-decoration: underline; }
+    .file-card[draggable="true"]:not(.is-over):hover { border-color: #a9a69b; }
+    .file-open-hint { position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%); padding: 0.2rem 0.6rem; border-radius: 999px; background: var(--primary); color: #fff; font-size: 0.75rem; font-weight: 600; line-height: 1.2; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.15s; }
+    .file-card:hover .file-open-hint, .file-card:focus-within .file-open-hint { opacity: 1; }
     .file-card .file-body { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 0.5rem; align-items: start; padding: 0 0.6rem 0.4rem; }
     .file-badge { grid-row: 1 / span 2; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: var(--primary); color: var(--accent); font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; margin-top: 1px; }
     .file-card .file-name { grid-column: 2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; overflow: hidden; overflow-wrap: anywhere; word-break: break-word; font-size: 0.9375rem; line-height: 1.3; font-weight: 600; }
@@ -159,6 +166,7 @@
     .touch-only { display: none; }
     @media (hover: none) {
       .file-handle, .mouse-only { display: none; }
+      .file-open-hint { opacity: 1; }
       .touch-only { display: inline; }
       .file-row { grid-template-columns: auto minmax(0, 1fr) auto auto; }
     }
@@ -368,7 +376,7 @@
     <div id="stage-files" class="section hidden">
       <h2 tabindex="-1">Put the files in order</h2>
       <div class="files-head">
-        <p class="files-hint">The pages are combined in this order. <span class="mouse-only">Drag a file, or use the arrows.</span><span class="touch-only">Use the arrows to move a file.</span> Drop more PDFs anywhere on this list.</p>
+        <p class="files-hint">The pages are combined in this order. <span class="mouse-only">Drag a file, or use the arrows. Click a file to see and arrange its pages, or Continue to see them all.</span><span class="touch-only">Use the arrows to move a file. Tap a file to see and arrange its pages, or Continue to see them all.</span> Drop more PDFs anywhere on this list.</p>
         <div class="view-switch" role="group" aria-label="Show the files as">
           <button type="button" id="view-cards" data-view="cards" aria-pressed="true">Thumbnails</button>
           <button type="button" id="view-list" data-view="list" aria-pressed="false">List</button>
