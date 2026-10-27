@@ -17,6 +17,8 @@
   // a canvas over 16,777,216 pixels and budgets canvas memory tightly, so it gets half.
   const MAX_RASTER_PIXELS = IS_IOS ? 8e6 : 16e6;
   const THUMB_WIDTH = 150;
+  const COVER_WIDTH = 320;  // a file's first page on its card at step 2
+  const VIEW_PREF_KEY = 'papertooling.filesView';
   // Above this, combining needs a few hundred MB of free memory; say so, but never refuse.
   const BIG_SET_BYTES = 150 * 1024 * 1024;
   const UNLOCK_LIB_URL = 'https://cdn.jsdelivr.net/npm/@cantoo/pdf-lib@2.11.1/dist/pdf-lib.min.js';
@@ -36,6 +38,8 @@
   let focusedCard = 0;
   let pendingFocus = null;
   const thumbCache = new Map();
+  const coverCache = new Map(); // source id -> canvas of its first page
+  let filesView = readViewPref();
 
   // Everything about the current run. `sources` are the files in combining order; `pages` is every
   // page of every good file, in that order; a page is cut by its 'sourceId:pageIndex' key, so a cut
@@ -244,6 +248,7 @@
     src.pdfDoc = null;
     src.libDoc = null;
     src.bytes = null;
+    coverCache.delete(src.id);
   }
 
   // pdf-lib's copy of a file is what the combining uses. Two things can go wrong with it.
@@ -314,67 +319,184 @@
     return e;
   }
 
+  // ---- The files, in order ---------------------------------------------------------------------
+  // Step 2 shows the files two ways: a card per file with its first page drawn (the default), or
+  // a compact list. The choice is remembered in this browser.
+  function readViewPref() {
+    try { return localStorage.getItem(VIEW_PREF_KEY) === 'list' ? 'list' : 'cards'; } catch (e) { return 'cards'; }
+  }
+  function applyFilesView() {
+    filesList.className = filesView === 'list' ? 'files-list' : 'files-grid';
+    document.querySelectorAll('.view-switch button').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === filesView ? 'true' : 'false'));
+  }
+  function setFilesView(view) {
+    if (view === filesView) return;
+    filesView = view;
+    try { localStorage.setItem(VIEW_PREF_KEY, view); } catch (e) {}
+    applyFilesView();
+    renderFilesList();
+    announce(view === 'list' ? 'Files shown as a list.' : 'Files shown as thumbnails.');
+  }
+
+  function fileMetaText(src) { return src.loading ? 'Opening…' : src.error ? src.error : groupMeta(src); }
+
+  function fileControls(src, i) {
+    const cards = filesView !== 'list';
+    const ctl = el('div', 'file-controls');
+    const up = el('button', null, cards ? '←' : '↑');
+    up.type = 'button'; up.dataset.act = 'up';
+    up.title = cards ? 'Move earlier' : 'Move up';
+    up.setAttribute('aria-label', 'Move ' + src.fileName + (cards ? ' earlier' : ' up'));
+    up.disabled = i === 0 || !!src.error;
+    const down = el('button', null, cards ? '→' : '↓');
+    down.type = 'button'; down.dataset.act = 'down';
+    down.title = cards ? 'Move later' : 'Move down';
+    down.setAttribute('aria-label', 'Move ' + src.fileName + (cards ? ' later' : ' down'));
+    down.disabled = i === state.sources.length - 1 || !!src.error;
+    const rm = el('button', null, '×');
+    rm.type = 'button'; rm.dataset.act = 'remove'; rm.title = 'Remove';
+    rm.setAttribute('aria-label', 'Remove ' + src.fileName);
+    up.addEventListener('click', () => moveSource(i, i - 1, 'up'));
+    down.addEventListener('click', () => moveSource(i, i + 1, 'down'));
+    rm.addEventListener('click', () => removeSource(i));
+    ctl.appendChild(up); ctl.appendChild(down); ctl.appendChild(rm);
+    return ctl;
+  }
+
+  function wireDrag(item, i) {
+    item.addEventListener('dragstart', e => {
+      dragFrom = i;
+      try { e.dataTransfer.setData('text/plain', String(i)); e.dataTransfer.effectAllowed = 'move'; } catch (err) {}
+      item.classList.add('is-dragging');
+    });
+    item.addEventListener('dragover', e => {
+      if (dragFrom === null) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      item.classList.add('is-over');
+    });
+    item.addEventListener('dragleave', () => item.classList.remove('is-over'));
+    item.addEventListener('drop', e => {
+      if (dragFrom === null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const from = dragFrom;
+      dragFrom = null;
+      moveSource(from, i, '');
+    });
+    item.addEventListener('dragend', () => { dragFrom = null; renderFilesList(); });
+  }
+
+  function buildFileRow(src, i) {
+    const row = el('div', 'file-item file-row' + (src.error ? ' is-error' : ''));
+    const handle = el('span', 'file-handle', '⋮');
+    handle.title = 'Drag to reorder';
+    handle.setAttribute('aria-hidden', 'true');
+    row.appendChild(handle);
+    row.appendChild(el('span', 'file-num', String(i + 1)));
+    const name = el('span', 'file-name', src.fileName);
+    name.title = src.fileName;
+    row.appendChild(name);
+    const metaEl = el('span', 'file-meta', fileMetaText(src));
+    if (src.libError) metaEl.title = 'This file has ' + src.libError + '.';
+    row.appendChild(metaEl);
+    row.appendChild(fileControls(src, i));
+    return row;
+  }
+
+  function buildFileCard(src, i) {
+    const card = el('div', 'file-item file-card' + (src.error ? ' is-error' : '') + (src.numPages > 1 ? ' is-stack' : ''));
+    card.dataset.sid = String(src.id);
+    const cover = el('div', 'file-cover');
+    if (!src.loading && !src.error) cover.title = 'Drag to reorder';
+    const cached = coverCache.get(src.id);
+    if (cached) {
+      cover.appendChild(cached);
+    } else {
+      // Wide sheets are limited by the card's width, tall ones by the cover's height.
+      const aspect = src.aspect || 8.5 / 11;
+      const ph = el('div', 'thumb-placeholder ' + (aspect >= 1.18 ? 'is-wide' : 'is-tall'), src.loading ? 'Opening…' : src.error ? 'Could not open' : 'Page 1…');
+      ph.style.aspectRatio = String(aspect);
+      cover.appendChild(ph);
+      if (!src.loading && !src.error) { if (coverObserver) coverObserver.observe(card); else coverQueue.push(card); }
+    }
+    card.appendChild(cover);
+    const body = el('div', 'file-body');
+    const badge = el('span', 'file-badge');
+    badge.appendChild(el('span', 'visually-hidden', 'File '));
+    badge.appendChild(document.createTextNode(String(i + 1)));
+    body.appendChild(badge);
+    const name = el('div', 'file-name', src.fileName);
+    name.title = src.fileName;
+    body.appendChild(name);
+    const metaEl = el('div', 'file-meta', fileMetaText(src).replace(/(\d) (pages?|[KMG]?B)\b/g, '$1 $2'));
+    if (src.libError) metaEl.title = 'This file has ' + src.libError + '.';
+    body.appendChild(metaEl);
+    card.appendChild(body);
+    card.appendChild(fileControls(src, i));
+    return card;
+  }
+
+  // Covers are drawn as the cards scroll into view, one at a time, like the page thumbnails.
+  const coverQueue = [];
+  const coverPending = new Set();
+  let coverBusy = false;
+  const coverObserver = ('IntersectionObserver' in window) ? new IntersectionObserver(entries => {
+    entries.forEach(en => { if (en.isIntersecting) { coverObserver.unobserve(en.target); coverQueue.push(en.target); } });
+    drainCovers();
+  }, { rootMargin: '500px 0px' }) : null;
+
+  async function drainCovers() {
+    if (coverBusy) return;
+    coverBusy = true;
+    try {
+      while (coverQueue.length) {
+        const card = coverQueue.shift();
+        const sid = parseInt(card.dataset.sid, 10);
+        if (!card.isConnected || coverCache.has(sid) || coverPending.has(sid)) continue;
+        const src = sourceById(sid);
+        if (!src || !src.pdfDoc) continue;
+        coverPending.add(sid);
+        let canvas = null;
+        try { canvas = await renderThumbnail(src, 1, COVER_WIDTH); } catch (e) { canvas = null; }
+        coverPending.delete(sid);
+        // The list may have been rebuilt meanwhile: find the card that shows this file now.
+        const ph = filesList.querySelector('.file-card[data-sid="' + sid + '"] .thumb-placeholder');
+        if (canvas && sourceById(sid) === src) {
+          coverCache.set(sid, canvas);
+          if (ph) ph.replaceWith(canvas);
+        } else if (ph && !canvas) {
+          ph.textContent = 'Could not draw';
+        }
+      }
+    } finally {
+      coverBusy = false;
+    }
+  }
+
   function renderFilesList() {
     if (dragFrom !== null) return; // never rebuild under a drag; dragend rebuilds
-    // Where focus was: the same button in the same row again after the rebuild.
+    // Where focus was: the same button on the same file again after the rebuild.
     let keep = pendingFocus;
     pendingFocus = null;
     const ae = document.activeElement;
     if (!keep && ae && filesList.contains(ae)) {
-      const row = ae.closest('.file-row');
-      keep = { index: row ? parseInt(row.dataset.index, 10) : 0, title: ae.title || '' };
+      const item = ae.closest('.file-item');
+      keep = { index: item ? parseInt(item.dataset.index, 10) : 0, act: ae.dataset.act || '' };
     }
+    const cards = filesView !== 'list';
+    if (coverObserver) coverObserver.disconnect();
+    coverQueue.length = 0;
     filesList.innerHTML = '';
     state.sources.forEach((src, i) => {
-      const row = el('div', 'file-row' + (src.error ? ' is-error' : ''));
-      row.dataset.index = String(i);
-      row.draggable = !src.loading && !src.error;
-      const handle = el('span', 'file-handle', '⋮');
-      handle.title = 'Drag to reorder';
-      handle.setAttribute('aria-hidden', 'true');
-      row.appendChild(handle);
-      row.appendChild(el('span', 'file-num', String(i + 1)));
-      const name = el('span', 'file-name', src.fileName);
-      name.title = src.fileName;
-      row.appendChild(name);
-      const meta = src.loading ? 'Opening…' : src.error ? src.error
-        : src.numPages + (src.numPages === 1 ? ' page' : ' pages') + ' · ' + formatBytes(src.size) + sourceFlags(src);
-      const metaEl = el('span', 'file-meta', meta);
-      if (src.libError) metaEl.title = 'This file has ' + src.libError + '.';
-      row.appendChild(metaEl);
-      const ctl = el('div', 'file-controls');
-      const up = el('button', null, '↑'); up.type = 'button'; up.title = 'Move up'; up.setAttribute('aria-label', 'Move ' + src.fileName + ' up'); up.disabled = i === 0 || !!src.error;
-      const down = el('button', null, '↓'); down.type = 'button'; down.title = 'Move down'; down.setAttribute('aria-label', 'Move ' + src.fileName + ' down'); down.disabled = i === state.sources.length - 1 || !!src.error;
-      const rm = el('button', null, '×'); rm.type = 'button'; rm.title = 'Remove'; rm.setAttribute('aria-label', 'Remove ' + src.fileName);
-      up.addEventListener('click', () => moveSource(i, i - 1, 'Move up'));
-      down.addEventListener('click', () => moveSource(i, i + 1, 'Move down'));
-      rm.addEventListener('click', () => removeSource(i));
-      ctl.appendChild(up); ctl.appendChild(down); ctl.appendChild(rm);
-      row.appendChild(ctl);
-      row.addEventListener('dragstart', e => {
-        dragFrom = i;
-        try { e.dataTransfer.setData('text/plain', String(i)); e.dataTransfer.effectAllowed = 'move'; } catch (err) {}
-        row.classList.add('is-dragging');
-      });
-      row.addEventListener('dragover', e => {
-        if (dragFrom === null) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        row.classList.add('is-over');
-      });
-      row.addEventListener('dragleave', () => row.classList.remove('is-over'));
-      row.addEventListener('drop', e => {
-        if (dragFrom === null) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const from = dragFrom;
-        dragFrom = null;
-        moveSource(from, i, '');
-      });
-      row.addEventListener('dragend', () => { dragFrom = null; renderFilesList(); });
-      filesList.appendChild(row);
+      const item = cards ? buildFileCard(src, i) : buildFileRow(src, i);
+      item.dataset.index = String(i);
+      item.draggable = !src.loading && !src.error;
+      wireDrag(item, i);
+      filesList.appendChild(item);
     });
-    if (keep) focusRowButton(keep.index, keep.title);
+    if (cards && !coverObserver) drainCovers();
+    if (keep) focusRowButton(keep.index, keep.act);
     const good = goodSources();
     const loading = state.sources.some(s => s.loading);
     const pages = good.reduce((n, s) => n + s.numPages, 0);
@@ -402,21 +524,21 @@
     updateFileBar();
   }
 
-  function focusRowButton(index, title) {
-    const rows = filesList.querySelectorAll('.file-row');
-    if (!rows.length) { $('btn-add-files').focus(); return; }
-    const row = rows[Math.max(0, Math.min(index, rows.length - 1))];
-    let btn = title ? row.querySelector('button[title="' + title + '"]') : null;
-    if (!btn || btn.disabled) btn = Array.from(row.querySelectorAll('button')).find(b => !b.disabled);
+  function focusRowButton(index, act) {
+    const items = filesList.querySelectorAll('.file-item');
+    if (!items.length) { $('btn-add-files').focus(); return; }
+    const item = items[Math.max(0, Math.min(index, items.length - 1))];
+    let btn = act ? item.querySelector('button[data-act="' + act + '"]') : null;
+    if (!btn || btn.disabled) btn = Array.from(item.querySelectorAll('button')).find(b => !b.disabled);
     (btn || $('btn-add-files')).focus();
   }
 
-  function moveSource(from, to, title) {
+  function moveSource(from, to, act) {
     if (to < 0 || to >= state.sources.length || from === to) return;
     const [s] = state.sources.splice(from, 1);
     state.sources.splice(to, 0, s);
     state.userOrdered = true;
-    pendingFocus = { index: to, title: title };
+    pendingFocus = { index: to, act: act };
     renderFilesList();
   }
 
@@ -424,7 +546,7 @@
     const [src] = state.sources.splice(i, 1);
     if (src) destroySource(src);
     if (!state.sources.length) { startOver(true); return; }
-    pendingFocus = { index: Math.min(i, state.sources.length - 1), title: 'Remove' };
+    pendingFocus = { index: Math.min(i, state.sources.length - 1), act: 'remove' };
     renderFilesList();
   }
 
@@ -1150,6 +1272,9 @@
     thumbCache.clear();
     thumbQueue.length = 0;
     if (thumbObserver) thumbObserver.disconnect();
+    coverCache.clear();
+    coverQueue.length = 0;
+    if (coverObserver) coverObserver.disconnect();
     thumbGrid.innerHTML = '';
     filesList.innerHTML = '';
     $('files-total').textContent = '';
@@ -1246,6 +1371,8 @@
   $('btn-add-files').addEventListener('click', () => { fileInput.click(); });
   $('btn-add-files-pages').addEventListener('click', () => { fileInput.click(); });
   $('btn-sort-files').addEventListener('click', sortSources);
+  document.querySelectorAll('.view-switch button').forEach(b => b.addEventListener('click', () => setFilesView(b.dataset.view)));
+  applyFilesView();
   $('btn-start-over-files').addEventListener('click', () => startOver(false));
   $('btn-continue-files').addEventListener('click', startPicking);
 
