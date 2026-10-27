@@ -181,6 +181,7 @@
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
       gap: 1rem;
+      align-items: start; /* a portrait page beside landscape sheets: each card its own height */
     }
     @media (max-width: 480px) { .thumb-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; } }
     .thumb-group { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 0.5rem 0.75rem; flex-wrap: wrap; padding: 0.75rem 0 0; border-top: 1px solid var(--border); }
@@ -226,6 +227,42 @@
     .bulk-actions .btn { padding: 0.45rem 0.8rem; font-size: 0.875rem; }
     .bulk-hint { font-size: 0.8125rem; color: var(--muted); }
     .page-size { font-size: 0.75rem; color: var(--muted); }
+    /* Putting pages in order: a page is dragged by its cell; the ⋮ beside it opens the move menu. */
+    .thumb-cell { position: relative; min-width: 0; }
+    .thumb-cell[draggable="true"] { cursor: grab; }
+    .thumb-cell.is-dragging .thumb-card { opacity: 0.4; }
+    .thumb-cell.is-over-before::before, .thumb-cell.is-over-after::before { content: ''; position: absolute; top: 0; bottom: 0; width: 4px; border-radius: 2px; background: var(--primary); pointer-events: none; }
+    .thumb-cell.is-over-before::before { left: -10px; }
+    .thumb-cell.is-over-after::before { right: -10px; }
+    @media (max-width: 480px) { .thumb-cell.is-over-before::before { left: -7px; } .thumb-cell.is-over-after::before { right: -7px; } }
+    .thumb-card.is-marked { border-color: #c9a227; }
+    .mark-badge { position: absolute; top: 6px; left: 6px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: var(--accent); color: var(--primary); font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+    .thumb-file { display: flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.5rem 0; font-size: 0.75rem; color: var(--muted); white-space: nowrap; overflow: hidden; }
+    .thumb-file span { overflow: hidden; text-overflow: ellipsis; }
+    .file-dot { flex: none; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--dot, #999); }
+    .thumb-group .file-dot { align-self: center; }
+    .thumb-cell .thumb-card .thumb-controls { padding-right: 40px; }
+    .thumb-menu-btn { position: absolute; right: 4px; bottom: 3px; width: 32px; height: 28px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--primary); font-size: 1.15rem; line-height: 1; cursor: pointer; }
+    .thumb-menu-btn:hover, .thumb-menu-btn[aria-expanded="true"] { background: var(--bg); border-color: #cfccc2; }
+    .file-legend { display: flex; flex-direction: column; gap: 0.1rem; margin-bottom: 1rem; }
+    .file-legend .thumb-group { border-top: 0; padding: 0.2rem 0; }
+    .move-bar { position: sticky; bottom: 0.75rem; z-index: 5; margin-top: 1rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.5rem 0.75rem; background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,0.14); }
+    .move-bar b { color: var(--primary); }
+    .move-bar .btn { padding: 0.45rem 0.8rem; font-size: 0.875rem; }
+    .page-menu { position: fixed; z-index: 50; min-width: 210px; padding: 0.3rem; background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.18); }
+    .page-menu-title { padding: 0.35rem 0.6rem 0.25rem; font-size: 0.75rem; color: var(--muted); }
+    .page-menu button { display: block; width: 100%; text-align: left; padding: 0.5rem 0.6rem; border: 0; border-radius: 6px; background: transparent; color: var(--primary); font: inherit; font-size: 0.9375rem; cursor: pointer; }
+    .page-menu button:hover:not(:disabled), .page-menu button:focus-visible { background: var(--bg); outline: none; }
+    .page-menu button:disabled { opacity: 0.45; cursor: default; }
+    .page-menu hr { border: 0; border-top: 1px solid var(--border); margin: 0.3rem 0; }
+    .drag-ghost { position: fixed; top: -200px; left: -200px; padding: 0.4rem 0.8rem; background: var(--primary); color: var(--accent); border-radius: 8px; font-weight: 600; font-size: 0.9375rem; }
+    @media (pointer: coarse) {
+      /* Fingers: the ⋮ and the menu's rows are 44px, after the base rules above. */
+      .thumb-menu-btn { width: 44px; height: 44px; right: 2px; bottom: 2px; }
+      .thumb-cell .thumb-card .thumb-controls { padding-right: 50px; min-height: 48px; align-items: center; }
+      .page-menu button { padding: 0.75rem 0.7rem; }
+      .move-bar .btn { min-height: 44px; }
+    }
     /* The overlay while the pages are combined */
     .progress-overlay {
       position: fixed;
@@ -359,10 +396,28 @@
         <button type="button" class="btn btn-secondary" id="btn-deselect-all">Keep none</button>
         <button type="button" class="btn btn-secondary" id="btn-invert">Invert</button>
         <button type="button" class="btn btn-secondary" id="btn-add-files-pages">Add PDFs</button>
-        <span class="bulk-hint">Every page starts kept. <span class="mouse-only">Click a page to cut it · shift-click (or Shift+Enter) for a range · arrow keys move between pages.</span><span class="touch-only">Tap a page to cut it.</span></span>
+        <button type="button" class="btn btn-secondary" id="btn-sort-pages" disabled>Sort by file</button>
+        <span class="bulk-hint">Every page starts kept. <span class="mouse-only">Click a page to cut it, shift-click for a range. Drag a page to move it, or right-click it for choices; ⌘/Ctrl-click picks several to move together. Keyboard: arrows move between pages, Alt+arrows move the page, M opens its menu.</span><span class="touch-only">Tap a page to cut it. The ⋮ on a page moves it.</span></span>
       </div>
       <div id="stage1-note" class="note-msg"></div>
+      <div id="file-legend" class="file-legend hidden"></div>
       <div id="thumb-grid" class="thumb-grid" role="group" aria-label="Pages"></div>
+      <div id="move-bar" class="move-bar hidden" role="region" aria-label="Pages selected to move">
+        <span id="move-bar-text"></span>
+        <button type="button" class="btn btn-secondary" id="btn-move-front">Move to front</button>
+        <button type="button" class="btn btn-secondary" id="btn-move-end">Move to end</button>
+        <button type="button" class="btn btn-secondary" id="btn-move-clear">Clear</button>
+        <span class="bulk-hint mouse-only">Drag any selected page to place them all.</span>
+      </div>
+      <div id="page-menu" class="page-menu hidden" role="menu" aria-labelledby="page-menu-title">
+        <div class="page-menu-title" id="page-menu-title"></div>
+        <button type="button" role="menuitem" data-act="front">Move to front</button>
+        <button type="button" role="menuitem" data-act="earlier">Move earlier</button>
+        <button type="button" role="menuitem" data-act="later">Move later</button>
+        <button type="button" role="menuitem" data-act="end">Move to end</button>
+        <hr>
+        <button type="button" role="menuitem" data-act="mark">Select to move together</button>
+      </div>
       <div id="stage1-error" class="error-msg hidden" role="alert"></div>
       <div class="actions">
         <button type="button" class="btn btn-secondary" id="btn-back-1">Back to files</button>

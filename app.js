@@ -37,6 +37,16 @@
   let lastClickedIndex = null;
   let focusedCard = 0;
   let pendingFocus = null;
+  let pendingFocusKey = null;   // the page card to focus once the grid is rebuilt
+  let pageDrag = null;          // a page drag in step 3: { keys, set }
+  let dropAt = null;            // where it would land: { key, side }
+  let dropCell = null;
+  let menuFor = null;           // the page whose ⋮ menu is open
+  let menuClosedFor = null, menuClosedAt = 0;
+  let menuPlace = null;         // where it sits: { anchor } or a point in page coordinates { x, y }
+  const marked = new Set();     // page keys picked to move together
+  // A colour per file, by file id, so it never changes when the files are reordered.
+  const FILE_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#9333ea', '#ea580c', '#0891b2', '#be185d', '#854d0e'];
   const thumbCache = new Map();
   const coverCache = new Map(); // source id -> canvas of its first page
   let filesView = readViewPref();
@@ -53,6 +63,8 @@
       selectedIndices: [],
       keyPageIndex: null,
       userOrdered: false,
+      order: null,          // the page keys in her order, once she has moved pages by hand
+      pinned: new Set(),    // the keys she moved: they keep their places while the files change
       output: null,
       filteredPdfBytes: null,
       compressedPdfBytes: null,
@@ -568,6 +580,7 @@
 
   function startPicking() {
     clearNotes();
+    marked.clear();
     setError($('stage1-error'), '');
     buildPages();
     buildThumbCards();
@@ -576,9 +589,26 @@
     runBackgroundWork();
   }
 
+  // The pages start in file order. Once she has moved pages by hand, the moved ones ("pinned")
+  // keep their places and the rest follow file order around them: a page dragged to the front is
+  // still at the front after the files are reordered, added to or one is removed.
   function buildPages() {
-    state.pages = [];
-    goodSources().forEach(src => { for (let p = 0; p < src.numPages; p++) state.pages.push({ s: src.id, p }); });
+    const natural = [];
+    goodSources().forEach(src => { for (let p = 0; p < src.numPages; p++) natural.push({ s: src.id, p }); });
+    const have = new Map(natural.map(pg => [pageKey(pg), pg]));
+    state.pinned.forEach(k => { if (!have.has(k)) state.pinned.delete(k); });
+    marked.forEach(k => { if (!have.has(k)) marked.delete(k); });
+    if (state.pinned.size) {
+      const pages = natural.filter(pg => !state.pinned.has(pageKey(pg)));
+      (state.order || []).forEach((k, i) => { if (state.pinned.has(k)) pages.splice(Math.min(i, pages.length), 0, have.get(k)); });
+      const placed = new Set(pages.map(pageKey));
+      natural.forEach(pg => { if (!placed.has(pageKey(pg))) pages.push(pg); });
+      state.pages = pages;
+      state.order = pages.map(pageKey);
+    } else {
+      state.pages = natural;
+      state.order = null;
+    }
     // The kept list is rebuilt from the cuts by updateStage1State; until then nothing may read it.
     state.selectedIndices = [];
     state.keyPageIndex = null;
@@ -641,9 +671,18 @@
 
   function groupMeta(src) { return src.numPages + (src.numPages === 1 ? ' page' : ' pages') + ' · ' + formatBytes(src.size) + sourceFlags(src); }
 
+  function fileColor(src) { return FILE_COLORS[(src.id - 1) % FILE_COLORS.length]; }
+  function fileDot(src) {
+    const d = el('i', 'file-dot');
+    d.style.setProperty('--dot', fileColor(src));
+    d.setAttribute('aria-hidden', 'true');
+    return d;
+  }
+
   function buildGroupHeader(src) {
     const h = el('div', 'thumb-group');
     h.dataset.source = String(src.id);
+    h.appendChild(fileDot(src));
     h.appendChild(el('span', 'thumb-group-name', src.fileName));
     h.appendChild(el('span', 'thumb-group-meta', groupMeta(src)));
     const actions = el('div', 'thumb-group-actions');
@@ -657,7 +696,7 @@
   }
 
   function refreshGroupHeaders() {
-    thumbGrid.querySelectorAll('.thumb-group').forEach(h => {
+    document.querySelectorAll('#thumb-grid .thumb-group, #file-legend .thumb-group').forEach(h => {
       const src = sourceById(parseInt(h.dataset.source, 10));
       if (src) h.querySelector('.thumb-group-meta').textContent = groupMeta(src);
     });
@@ -667,13 +706,29 @@
     thumbGrid.innerHTML = '';
     thumbQueue.length = 0;
     if (thumbObserver) thumbObserver.disconnect();
+    closePageMenu(false);
     const many = goodSources().length > 1;
+    const custom = !!state.order;
+    // In file order each file heads its own pages. Once pages are mixed, the files are listed
+    // above the grid instead, and every card says which file it is from.
+    const legend = $('file-legend');
+    legend.innerHTML = '';
+    legend.classList.toggle('hidden', !(many && custom));
+    if (many && custom) goodSources().forEach(src => legend.appendChild(buildGroupHeader(src)));
+    $('btn-sort-pages').disabled = !custom;
+    if (pendingFocusKey !== null) { const at = indexOfKey(pendingFocusKey); if (at >= 0) focusedCard = at; }
+    focusedCard = Math.max(0, Math.min(focusedCard, state.pages.length - 1));
     let lastSid = null;
     state.pages.forEach((pg, i) => {
       const src = sourceById(pg.s);
-      if (many && pg.s !== lastSid) { thumbGrid.appendChild(buildGroupHeader(src)); lastSid = pg.s; }
+      if (many && !custom && pg.s !== lastSid) { thumbGrid.appendChild(buildGroupHeader(src)); lastSid = pg.s; }
       const pageNum = i + 1;
       const key = pageKey(pg);
+      const cell = el('div', 'thumb-cell');
+      cell.dataset.index = String(i);
+      cell.dataset.key = key;
+      cell.draggable = true;
+      wirePageDrag(cell, i);
       const card = el('div', 'thumb-card');
       card.dataset.index = String(i);
       card.dataset.key = key;
@@ -681,9 +736,10 @@
       card.setAttribute('role', 'checkbox');
       card.setAttribute('aria-label', 'Keep page ' + pageNum + (many ? ' (' + src.fileName + ', page ' + (pg.p + 1) + ')' : ''));
       card.title = many ? src.fileName + ' · page ' + (pg.p + 1) + ' of ' + src.numPages : '';
-      card.addEventListener('click', e => onCardActivate(i, e.shiftKey));
+      card.addEventListener('click', e => { if (e.metaKey || e.ctrlKey) toggleMark(i); else onCardActivate(i, e.shiftKey); });
       card.addEventListener('keydown', e => onCardKey(e, i));
       card.addEventListener('focus', () => setFocusedCard(i));
+      card.addEventListener('contextmenu', e => { e.preventDefault(); openPageMenu(i, { x: e.clientX, y: e.clientY }); });
       const cached = thumbCache.get(key);
       if (cached) {
         card.appendChild(cached);
@@ -692,6 +748,13 @@
         if (src.aspect) placeholder.style.aspectRatio = String(src.aspect);
         card.appendChild(placeholder);
         if (thumbObserver) thumbObserver.observe(card); else thumbQueue.push(card);
+      }
+      if (many) {
+        const tag = el('div', 'thumb-file');
+        tag.appendChild(fileDot(src));
+        tag.appendChild(el('span', null, src.name));
+        tag.title = src.fileName;
+        card.appendChild(tag);
       }
       const controls = el('div', 'thumb-controls');
       const numSpan = el('span', 'page-num', String(pageNum));
@@ -704,9 +767,29 @@
       else if (src.libError) sizeSpan.textContent = '—';
       controls.appendChild(sizeSpan);
       card.appendChild(controls);
-      thumbGrid.appendChild(card);
+      cell.appendChild(card);
+      // The menu sits beside the checkbox, not inside it: a checkbox's insides are not read out.
+      const menuBtn = el('button', 'thumb-menu-btn', '⋮');
+      menuBtn.type = 'button';
+      menuBtn.tabIndex = -1;
+      menuBtn.title = 'Move this page';
+      menuBtn.setAttribute('aria-label', 'Move page ' + pageNum);
+      menuBtn.setAttribute('aria-haspopup', 'menu');
+      menuBtn.setAttribute('aria-expanded', 'false');
+      menuBtn.addEventListener('click', () => {
+        if (menuClosedFor === i && Date.now() - menuClosedAt < 400) { menuClosedFor = null; return; } // the click that closed it
+        openPageMenu(i, { anchor: menuBtn });
+      });
+      cell.appendChild(menuBtn);
+      thumbGrid.appendChild(cell);
     });
     if (!thumbObserver) drainThumbs();
+    refreshMarks();
+    if (pendingFocusKey !== null) {
+      pendingFocusKey = null;
+      const c = thumbGrid.querySelectorAll('.thumb-card')[focusedCard];
+      if (c) c.focus();
+    }
   }
 
   // One Tab stop for the whole grid; the arrow keys move between pages.
@@ -718,11 +801,25 @@
     if (cards[i]) cards[i].tabIndex = 0;
   }
   function onCardKey(e, i) {
+    const arrow = e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown';
+    if (e.altKey && (arrow || e.key === 'Home' || e.key === 'End')) {
+      // Alt+arrows move the page itself; Alt+Home / Alt+End take it to the front or the end.
+      e.preventDefault();
+      pageAction(i, e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? 'earlier' : arrow ? 'later' : e.key === 'Home' ? 'front' : 'end');
+      return;
+    }
+    if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10') || ((e.key === 'm' || e.key === 'M') && !e.metaKey && !e.ctrlKey && !e.altKey)) {
+      e.preventDefault();
+      openPageMenu(i, { anchor: e.currentTarget });
+      return;
+    }
+    if ((e.key === ' ' || e.key === 'Enter') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); toggleMark(i); return; }
     if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); onCardActivate(i, e.shiftKey); return; }
     const cards = thumbGrid.querySelectorAll('.thumb-card');
     if (!cards.length) return;
     let cols = 1;
-    if (cards.length > 1) { const top0 = cards[0].offsetTop; for (let k = 1; k < cards.length && cards[k].offsetTop === top0; k++) cols++; }
+    const cells = thumbGrid.querySelectorAll('.thumb-cell');
+    if (cells.length > 1) { const top0 = cells[0].offsetTop; for (let k = 1; k < cells.length && cells[k].offsetTop === top0; k++) cols++; }
     let to = null;
     if (e.key === 'ArrowRight') to = i + 1;
     else if (e.key === 'ArrowLeft') to = i - 1;
@@ -735,6 +832,223 @@
     to = Math.max(0, Math.min(cards.length - 1, to));
     setFocusedCard(to);
     cards[to].focus();
+  }
+
+  // ---- Pages: put them in order -------------------------------------------------------------
+  // Drag a page where it should go, or use its ⋮ menu (right-click, or M on the keyboard).
+  // Several pages picked with ⌘/Ctrl-click move together, in their order, as a block.
+
+  function indexOfKey(key) { return state.pages.findIndex(pg => pageKey(pg) === key); }
+  function markedKeys() { return state.pages.map(pageKey).filter(k => marked.has(k)); }
+
+  // What an action on page `index` moves: the whole selection, when that page is in it.
+  function movingKeysFor(index) {
+    const key = keyAt(index);
+    return marked.has(key) && marked.size > 1 ? markedKeys() : [key];
+  }
+
+  // Take `keys` out of the list and put them back, in their order, at `at` (an index into the
+  // list without them). A moved page is pinned: it keeps its place while the files change.
+  function movePages(keys, at, where) {
+    const moving = new Set(keys);
+    const taken = state.pages.filter(pg => moving.has(pageKey(pg)));
+    if (!taken.length) return;
+    const rest = state.pages.filter(pg => !moving.has(pageKey(pg)));
+    at = Math.max(0, Math.min(rest.length, at));
+    const pages = rest.slice(0, at).concat(taken, rest.slice(at));
+    if (pages.every((pg, i) => pg === state.pages[i])) return;
+    state.pages = pages;
+    state.order = pages.map(pageKey);
+    taken.forEach(pg => state.pinned.add(pageKey(pg)));
+    pendingFocusKey = pageKey(taken[0]);
+    rebuildGrid();
+    const n = taken.length;
+    announce((n === 1 ? 'Page moved to ' : n + ' pages moved to ') + (where || 'position ' + (indexOfKey(pageKey(taken[0])) + 1) + ' of ' + state.pages.length) + '.');
+  }
+
+  // The grid, the kept list and the background pass all go by position: start them over.
+  function rebuildGrid() {
+    buildThumbCards();
+    updateStage1State();
+    runBackgroundWork();
+  }
+
+  function pageAction(index, act) {
+    if (act === 'mark') { toggleMark(index); return; }
+    const keys = movingKeysFor(index);
+    const idx = keys.map(indexOfKey);
+    const first = Math.min.apply(null, idx), last = Math.max.apply(null, idx);
+    if (act === 'front') movePages(keys, 0, 'the front');
+    else if (act === 'end') movePages(keys, state.pages.length, 'the end');
+    else if (act === 'earlier') movePages(keys, first - 1);
+    else if (act === 'later') movePages(keys, last + 2 - keys.length);
+  }
+
+  function sortPagesByFile() {
+    if (!state.order) return;
+    state.pinned.clear();
+    state.order = null;
+    buildPages();
+    rebuildGrid();
+    announce('Pages are back in file order.');
+  }
+
+  function toggleMark(index) {
+    const key = keyAt(index);
+    if (marked.has(key)) marked.delete(key); else marked.add(key);
+    refreshMarks();
+    announce('Page ' + (index + 1) + (marked.has(key) ? ' selected to move' : ' no longer selected') + ' · ' + marked.size + ' selected.');
+  }
+  function clearMarks() { marked.clear(); refreshMarks(); }
+
+  function refreshMarks() {
+    const order = markedKeys();
+    thumbGrid.querySelectorAll('.thumb-card').forEach(card => {
+      const at = order.indexOf(card.dataset.key);
+      card.classList.toggle('is-marked', at !== -1);
+      let b = card.querySelector('.mark-badge');
+      if (at === -1) { if (b) b.remove(); return; }
+      if (!b) { b = el('span', 'mark-badge'); b.setAttribute('aria-hidden', 'true'); card.appendChild(b); }
+      b.textContent = String(at + 1);
+    });
+    const bar = $('move-bar');
+    bar.classList.toggle('hidden', !order.length);
+    const t = $('move-bar-text');
+    t.textContent = '';
+    if (order.length) {
+      t.appendChild(el('b', null, order.length + (order.length === 1 ? ' page' : ' pages')));
+      t.appendChild(document.createTextNode(' selected to move together'));
+    }
+  }
+
+  // The ⋮ menu: one element, shown by the page it was opened for.
+  const pageMenu = $('page-menu');
+  function openPageMenu(index, where) {
+    closePageMenu(false);
+    menuFor = index;
+    const keys = movingKeysFor(index);
+    const idx = keys.map(indexOfKey);
+    const first = Math.min.apply(null, idx), last = Math.max.apply(null, idx);
+    const n = state.pages.length, k = keys.length;
+    $('page-menu-title').textContent = k > 1 ? k + ' selected pages' : 'Page ' + (index + 1) + ' of ' + n;
+    const items = Array.from(pageMenu.querySelectorAll('button'));
+    items.forEach(b => {
+      const a = b.dataset.act;
+      if (a === 'front') b.disabled = first === 0 && last === k - 1;
+      else if (a === 'earlier') b.disabled = first === 0;
+      else if (a === 'end') b.disabled = last === n - 1 && first === n - k;
+      else if (a === 'later') b.disabled = last === n - 1;
+      else if (a === 'mark') b.textContent = marked.has(keyAt(index)) ? 'Deselect this page' : 'Select to move together';
+    });
+    menuPlace = where.anchor ? { anchor: where.anchor } : { x: where.x + window.scrollX, y: where.y + window.scrollY };
+    if (where.anchor && where.anchor.classList.contains('thumb-menu-btn')) where.anchor.setAttribute('aria-expanded', 'true');
+    pageMenu.classList.remove('hidden');
+    placeMenu();
+    const firstItem = items.find(b => !b.disabled);
+    if (firstItem) firstItem.focus();
+  }
+  // Below its ⋮ (above it when there is no room), or at the pointer; it follows its page when the
+  // page scrolls, and stays inside the window.
+  function placeMenu() {
+    if (menuFor === null || !menuPlace) return;
+    if (menuPlace.anchor && !menuPlace.anchor.isConnected) { closePageMenu(false); return; }
+    const mw = pageMenu.offsetWidth, mh = pageMenu.offsetHeight;
+    let x, y;
+    if (menuPlace.anchor) {
+      const r = menuPlace.anchor.getBoundingClientRect();
+      x = r.right - mw; y = r.bottom + 4;
+      if (y + mh > window.innerHeight - 8 && r.top - mh - 4 >= 8) y = r.top - mh - 4;
+    } else {
+      x = menuPlace.x - window.scrollX; y = menuPlace.y - window.scrollY;
+    }
+    pageMenu.style.left = Math.max(8, Math.min(x, window.innerWidth - mw - 8)) + 'px';
+    pageMenu.style.top = Math.max(8, Math.min(y, window.innerHeight - mh - 8)) + 'px';
+  }
+  function closePageMenu(refocus) {
+    if (menuFor === null) return;
+    const i = menuFor;
+    menuFor = null;
+    menuClosedFor = i; menuClosedAt = Date.now();
+    if (menuPlace && menuPlace.anchor && menuPlace.anchor.classList.contains('thumb-menu-btn')) menuPlace.anchor.setAttribute('aria-expanded', 'false');
+    menuPlace = null;
+    pageMenu.classList.add('hidden');
+    if (refocus) { const c = thumbGrid.querySelectorAll('.thumb-card')[i]; if (c) { setFocusedCard(i); c.focus(); } }
+  }
+  pageMenu.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b || b.disabled || menuFor === null) return;
+    const i = menuFor;
+    closePageMenu(b.dataset.act === 'mark');
+    pageAction(i, b.dataset.act);
+  });
+  pageMenu.addEventListener('keydown', e => {
+    const items = Array.from(pageMenu.querySelectorAll('button')).filter(b => !b.disabled);
+    const at = items.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); closePageMenu(true); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); items[(at + 1) % items.length].focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(at - 1 + items.length) % items.length].focus(); }
+    else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+    else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+    else if (e.key === 'Tab') closePageMenu(true); // Tab goes on from the page's card
+  });
+  document.addEventListener('pointerdown', e => { if (menuFor !== null && !pageMenu.contains(e.target)) closePageMenu(false); });
+  window.addEventListener('resize', placeMenu);
+  window.addEventListener('scroll', placeMenu, true);
+
+  // Dragging a page: the bar shows which side of the page under the pointer it will land on.
+  function wirePageDrag(cell, i) {
+    cell.addEventListener('dragstart', e => {
+      const keys = movingKeysFor(i);
+      pageDrag = { keys: keys, set: new Set(keys) };
+      dropAt = null;
+      try { e.dataTransfer.setData('text/plain', 'pages'); e.dataTransfer.effectAllowed = 'move'; } catch (err) {}
+      if (keys.length > 1 && e.dataTransfer && e.dataTransfer.setDragImage) {
+        const ghost = el('div', 'drag-ghost', keys.length + ' pages');
+        document.body.appendChild(ghost);
+        try { e.dataTransfer.setDragImage(ghost, 24, 20); } catch (err) {}
+        setTimeout(() => ghost.remove(), 0);
+      }
+      setTimeout(() => { if (pageDrag) thumbGrid.querySelectorAll('.thumb-cell').forEach(c => c.classList.toggle('is-dragging', pageDrag.set.has(c.dataset.key))); }, 0);
+    });
+    cell.addEventListener('dragover', e => {
+      if (!pageDrag) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (pageDrag.set.has(cell.dataset.key)) { setDropAt(null, null); return; }
+      const r = cell.getBoundingClientRect();
+      setDropAt({ key: cell.dataset.key, side: e.clientX < r.left + r.width / 2 ? 'before' : 'after' }, cell);
+    });
+    cell.addEventListener('drop', e => {
+      if (!pageDrag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      finishPageDrag(false);
+    });
+    cell.addEventListener('dragend', () => finishPageDrag(true));
+  }
+  thumbGrid.addEventListener('dragover', e => { if (!pageDrag) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+  thumbGrid.addEventListener('dragleave', e => { if (pageDrag && !thumbGrid.contains(e.relatedTarget)) setDropAt(null, null); });
+  thumbGrid.addEventListener('drop', e => { if (!pageDrag) return; e.preventDefault(); finishPageDrag(false); });
+
+  function setDropAt(target, cell) {
+    if (dropCell && dropCell !== cell) dropCell.classList.remove('is-over-before', 'is-over-after');
+    dropAt = target;
+    dropCell = target ? cell : null;
+    if (cell) {
+      cell.classList.toggle('is-over-before', !!target && target.side === 'before');
+      cell.classList.toggle('is-over-after', !!target && target.side === 'after');
+    }
+  }
+  function finishPageDrag(cancelled) {
+    const drag = pageDrag, target = dropAt;
+    pageDrag = null;
+    setDropAt(null, null);
+    thumbGrid.querySelectorAll('.thumb-cell.is-dragging').forEach(c => c.classList.remove('is-dragging'));
+    if (!drag || cancelled || !target) return;
+    const rest = state.pages.map(pageKey).filter(k => !drag.set.has(k));
+    const at = rest.indexOf(target.key);
+    if (at === -1) return;
+    movePages(drag.keys, at + (target.side === 'after' ? 1 : 0));
   }
 
   // A page is a card you click: every page starts kept, a click cuts it (or keeps it again),
@@ -905,17 +1219,28 @@
     return groups;
   }
 
-  // Bookmarks, one per file, so a reader of the combined set jumps straight to "Civil Plans C2.0
-  // thru C4.1". pdf-lib has no outline API, so the few dictionaries are written by hand.
+  // Bookmarks, one per run of pages from the same file, so a reader of the combined set jumps
+  // straight to "Civil Plans C2.0 thru C4.1". A file whose pages were moved apart gets a bookmark
+  // per run, each saying which of its pages it holds. pdf-lib has no outline API, so the few
+  // dictionaries are written by hand.
+  function outlineTitle(g, runs) {
+    if (runs < 2) return g.src.name;
+    const p = g.local.map(x => x + 1);
+    const contiguous = p.every((x, i) => i === 0 || x === p[i - 1] + 1);
+    const which = p.length === 1 ? 'p. ' + p[0] : contiguous ? 'pp. ' + p[0] + '–' + p[p.length - 1] : 'pp. ' + p.slice(0, 4).join(', ') + (p.length > 4 ? '…' : '');
+    return g.src.name + ' (' + which + ')';
+  }
   function addOutline(doc, groups) {
     if (groups.length < 2) return;
     const ctx = doc.context;
     const pages = doc.getPages();
     const outlinesRef = ctx.nextRef();
     const refs = groups.map(() => ctx.nextRef());
+    const runs = new Map();
+    groups.forEach(g => runs.set(g.src.id, (runs.get(g.src.id) || 0) + 1));
     groups.forEach((g, i) => {
       const item = ctx.obj({
-        Title: PDFLib.PDFHexString.fromText(g.src.name),
+        Title: PDFLib.PDFHexString.fromText(outlineTitle(g, runs.get(g.src.id))),
         Parent: outlinesRef,
         Dest: [pages[g.from].ref, 'Fit']
       });
@@ -1275,7 +1600,13 @@
     coverCache.clear();
     coverQueue.length = 0;
     if (coverObserver) coverObserver.disconnect();
+    marked.clear();
+    pageDrag = null;
+    pendingFocusKey = null;
+    closePageMenu(false);
     thumbGrid.innerHTML = '';
+    $('file-legend').innerHTML = '';
+    $('move-bar').classList.add('hidden');
     filesList.innerHTML = '';
     $('files-total').textContent = '';
     $('files-warn').textContent = '';
@@ -1347,7 +1678,7 @@
   document.addEventListener('drop', e => {
     if (!hasFiles(e)) return;
     e.preventDefault();
-    if (dragFrom !== null || currentStage === 'stage2' || dropZone.contains(e.target) || stageFiles.contains(e.target)) return;
+    if (dragFrom !== null || pageDrag !== null || currentStage === 'stage2' || dropZone.contains(e.target) || stageFiles.contains(e.target)) return;
     addFiles(e.dataTransfer.files);
   });
 
@@ -1379,6 +1710,10 @@
   $('btn-select-all').addEventListener('click', () => { state.cut.clear(); updateStage1State(); });
   $('btn-deselect-all').addEventListener('click', () => { state.pages.forEach(pg => state.cut.add(pageKey(pg))); updateStage1State(); });
   $('btn-invert').addEventListener('click', () => { state.pages.forEach((pg, i) => setKept(i, !isKept(i))); updateStage1State(); });
+  $('btn-sort-pages').addEventListener('click', sortPagesByFile);
+  $('btn-move-front').addEventListener('click', () => movePages(markedKeys(), 0, 'the front'));
+  $('btn-move-end').addEventListener('click', () => movePages(markedKeys(), state.pages.length, 'the end'));
+  $('btn-move-clear').addEventListener('click', clearMarks);
   $('btn-back-1').addEventListener('click', backToFiles);
   $('btn-continue-1').addEventListener('click', () => {
     setError($('stage1-error'), '');
