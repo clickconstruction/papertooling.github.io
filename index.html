@@ -6,7 +6,7 @@
   <link rel="icon" href="favicon.ico" sizes="32x32">
   <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-180.png">
-  <title>PaperTooling — PDF stripper</title>
+  <title>PaperTooling — combine PDFs, cut pages, shrink the file</title>
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <style>
@@ -17,6 +17,7 @@
       --accent: #e8c547;
       --bg: #f6f5f1;
       --text: #2b2a28;
+      --muted: #6b6a66;
       --card-bg: #ffffff;
       --border: #ddd;
       --error: #c00;
@@ -34,6 +35,7 @@
     .container { max-width: 960px; margin: 0 auto; }
     h1, h2, h3 { color: var(--primary); margin-top: 0; }
     h2 { font-size: 1.25rem; border-bottom: 2px solid var(--accent); padding-bottom: 0.25rem; margin-bottom: 1rem; }
+    h2:focus { outline: none; }
     .section {
       background: var(--card-bg);
       border-radius: 8px;
@@ -42,25 +44,30 @@
       box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     }
     .hidden { display: none !important; }
-    /* The header and the three steps — the same shell the rest of the Tooling family wears. */
+    .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+    :focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+    /* The header and the four steps — the same shell the rest of the Tooling family wears. */
     .app-top-bar { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; padding: 0.75rem 1rem; background: var(--primary); color: #fff; border-radius: 10px; }
     .app-mark { width: 40px; height: 40px; border-radius: 9px; flex-shrink: 0; }
     .app-title { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
-    .app-name { font-size: 1.125rem; font-weight: 700; }
+    .app-name { font-size: 1.125rem; font-weight: 700; color: #fff; margin: 0; }
     .app-tag { font-size: 0.8125rem; color: #bdbbb3; }
     .app-steps-bar { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 0.35rem 1rem; flex-wrap: wrap; margin: 0 0 1rem; padding: 0.5rem 0.75rem; background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-    .app-steps { display: flex; gap: 0.35rem; flex-wrap: wrap; }
-    .app-step { padding: 0.3rem 0.75rem; border: 1px solid var(--border); border-radius: 999px; color: #6b6a66; font-size: 0.8125rem; white-space: nowrap; }
+    .app-steps { display: flex; gap: 0.35rem; flex-wrap: wrap; list-style: none; margin: 0; padding: 0; }
+    .app-step { font: inherit; padding: 0.3rem 0.75rem; border: 1px solid var(--border); border-radius: 999px; background: #fff; color: var(--muted); font-size: 0.8125rem; white-space: nowrap; cursor: default; }
     .app-step b { margin-right: 0.15rem; }
+    .app-step.is-done { cursor: pointer; }
+    .app-step.is-done:hover { border-color: #a9a69b; background: var(--bg); }
     .app-step.is-done::before { content: '\2713\00a0'; color: #2f7d4f; }
     .app-step.is-done b { display: none; }
     .app-step.is-current { background: var(--primary); border-color: var(--primary); color: var(--accent); font-weight: 600; }
-    .app-file { margin-left: auto; font-size: 0.8125rem; color: #6b6a66; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+    .app-file { margin-left: auto; font-size: 0.8125rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
     .app-file b { color: var(--primary); }
-    .app-keep { font-size: 0.8125rem; color: #6b6a66; white-space: nowrap; }
+    .app-keep { font-size: 0.8125rem; color: var(--muted); white-space: nowrap; }
     .app-keep b { color: var(--primary); font-size: 0.9375rem; }
     .app-keep:empty { display: none; }
-    @media (max-width: 640px) { .app-tag { display: none; } .app-file { margin-left: 0; width: 100%; } }
+    @media (max-width: 640px) { .app-tag { display: none; } .app-file { display: none; } }
+    @media (max-height: 500px) { .app-steps-bar { position: static; } }
     .btn {
       padding: 0.75rem 1.25rem;
       border: none;
@@ -76,11 +83,12 @@
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-secondary { background: #fff; color: var(--primary); border: 1px solid #cfccc2; font-weight: 500; }
     .btn-secondary:hover:not(:disabled) { background: var(--bg); border-color: #a9a69b; }
-    .btn-error { background: var(--error); }
-    .btn-error:hover:not(:disabled) { background: #a00; }
     .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1rem; align-items: center; }
+    .actions .spacer { flex: 1 1 auto; }
     .error-msg { color: var(--error); margin-top: 0.5rem; }
-    /* Drop zone */
+    .note-msg { color: var(--muted); font-size: 0.875rem; margin-top: 0.5rem; }
+    .note-msg:empty { display: none; }
+    /* Step 1: the drop zone */
     .drop-zone {
       border: 3px dashed var(--border);
       border-radius: 12px;
@@ -90,34 +98,80 @@
       cursor: pointer;
       transition: border-color 0.2s, background 0.2s;
     }
-    .drop-zone:hover, .drop-zone.dragover { border-color: var(--primary); background: #fdf8e3; }
+    .drop-zone:hover, .drop-zone.dragover, .drop-zone:focus-visible { border-color: var(--primary); background: #fdf8e3; }
     .drop-zone p { margin: 0.5rem 0; color: #666; }
     .drop-zone .drop-icon { font-size: 3rem; color: var(--secondary); margin-bottom: 0.5rem; }
-    .privacy-note { margin: 0.75rem 0 0; font-size: 0.875rem; color: #6b6a66; text-align: center; }
-    .quality-control { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.875rem; color: #666; }
-    .quality-control input[type="range"] { width: 100%; max-width: 260px; accent-color: var(--primary); }
-    .quality-hint { color: #8a8880; }
-    .grayscale-option { display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; color: #666; cursor: pointer; }
-    .grayscale-option input { margin: 0; }
-    /* Stage 1: Thumbnails */
+    .drop-status { font-weight: 600; color: var(--primary); }
+    .drop-status:empty { display: none; }
+    .privacy-note { margin: 0.75rem 0 0; font-size: 0.875rem; color: var(--muted); text-align: center; }
+    /* Step 2: the files, in order */
+    #stage-files.dragover { outline: 3px dashed var(--primary); outline-offset: -3px; background: #fdf8e3; }
+    .files-hint { font-size: 0.875rem; color: var(--muted); margin: -0.5rem 0 0.75rem; }
+    .files-list { display: flex; flex-direction: column; gap: 0.35rem; }
+    .file-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; align-items: center; gap: 0.6rem; padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+    .file-row.is-dragging { opacity: 0.4; }
+    .file-row.is-over { border-color: var(--primary); box-shadow: inset 0 3px 0 var(--accent); }
+    .file-row.is-error { border-color: #e2b4b0; background: #fff7f6; }
+    .file-handle { cursor: grab; color: #a9a69b; font-size: 1.25rem; line-height: 1; user-select: none; -webkit-user-select: none; padding: 0 0.1rem; }
+    .file-row.is-error .file-handle, .file-row[draggable="false"] .file-handle { visibility: hidden; }
+    .file-num { font-weight: 700; color: var(--primary); min-width: 1.4rem; text-align: right; font-variant-numeric: tabular-nums; }
+    .file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-meta { font-size: 0.8125rem; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .file-row.is-error .file-meta { color: var(--error); white-space: normal; }
+    .file-controls { display: flex; gap: 0.2rem; }
+    .file-controls button { width: 2rem; height: 2rem; padding: 0; border: 1px solid #cfccc2; border-radius: 6px; background: #fff; color: var(--primary); font-size: 0.9375rem; cursor: pointer; line-height: 1; }
+    .file-controls button:hover:not(:disabled) { background: var(--bg); border-color: #a9a69b; }
+    .file-controls button:disabled { opacity: 0.35; cursor: default; }
+    .files-total { margin-top: 0.9rem; font-size: 0.9375rem; color: var(--muted); }
+    .files-total b { color: var(--primary); }
+    .files-warn { font-size: 0.875rem; color: #7a4a00; background: #fff6e5; border: 1px solid #f3d9a4; border-radius: 8px; padding: 0.5rem 0.75rem; margin-top: 0.6rem; }
+    .files-warn:empty { display: none; }
+    .touch-only { display: none; }
+    @media (hover: none) {
+      .file-handle, .mouse-only { display: none; }
+      .touch-only { display: inline; }
+      .file-row { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+    }
+    @media (max-width: 640px) {
+      /* Phone: the name gets the whole width, the arrows go under it. */
+      .file-row { grid-template-columns: auto minmax(0, 1fr); row-gap: 0.3rem; }
+      .file-handle { display: none; }
+      .file-num { grid-row: 1 / span 2; align-self: start; padding-top: 0.15rem; }
+      .file-name { grid-column: 2; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+      .file-meta { grid-column: 2; white-space: normal; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+      .file-controls { grid-column: 2; }
+    }
+    @media (pointer: coarse) {
+      .file-controls button { width: 44px; height: 44px; }
+      .thumb-group-actions .btn, .bulk-actions .btn { min-height: 44px; }
+      .grayscale-option { min-height: 44px; }
+    }
+    /* Step 3: the pages */
     .thumb-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
       gap: 1rem;
     }
+    @media (max-width: 480px) { .thumb-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; } }
+    .thumb-group { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 0.5rem 0.75rem; flex-wrap: wrap; padding: 0.75rem 0 0; border-top: 1px solid var(--border); }
+    .thumb-group:first-child { border-top: 0; padding-top: 0; }
+    .thumb-group-name { font-weight: 700; color: var(--primary); min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+    .thumb-group-meta { font-size: 0.8125rem; color: var(--muted); }
+    .thumb-group-actions { margin-left: auto; display: flex; gap: 0.35rem; }
+    .thumb-group-actions .btn { padding: 0.25rem 0.6rem; font-size: 0.8125rem; }
     .thumb-card {
       border: 2px solid var(--border);
       border-radius: 8px;
       overflow: hidden;
       background: #fff;
       transition: border-color 0.2s;
+      position: relative; cursor: pointer; user-select: none; -webkit-user-select: none;
     }
-    .thumb-card { position: relative; cursor: pointer; user-select: none; }
-    .thumb-card:focus-visible { outline: 3px solid rgba(232,197,71,0.9); outline-offset: 2px; }
+    .thumb-card:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
     .thumb-card.selected { border-color: var(--primary); }
     .thumb-card.selected::after { content: '\2713'; position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%; background: var(--primary); color: var(--accent); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-    .thumb-card.cut { opacity: 0.45; }
-    .thumb-card.cut canvas { filter: grayscale(1); }
+    .thumb-card.cut::after { content: 'Cut'; position: absolute; top: 6px; right: 6px; padding: 0 0.5rem; height: 22px; border-radius: 999px; background: #b3261e; color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; }
+    .thumb-card.cut canvas, .thumb-card.cut .thumb-placeholder { opacity: 0.4; filter: grayscale(1); }
     .thumb-card canvas { display: block; width: 100%; height: auto; }
     .thumb-card .thumb-controls {
       padding: 0.4rem 0.5rem;
@@ -125,29 +179,28 @@
       justify-content: space-between;
       align-items: baseline;
       font-size: 0.8125rem;
-      color: #6b6a66;
+      color: var(--muted);
     }
     .thumb-card .page-num { font-weight: 600; color: var(--primary); }
-    .thumb-card label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.875rem; }
-    .thumb-card input[type="checkbox"], .thumb-card input[type="radio"] { margin: 0; }
+    .thumb-card .page-num small { font-weight: 400; color: var(--muted); }
     .thumb-placeholder {
       aspect-ratio: 8.5/11;
       background: #eee;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #999;
+      color: #777;
       font-size: 0.875rem;
     }
     .bulk-actions { margin-bottom: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
     .bulk-actions .btn { padding: 0.45rem 0.8rem; font-size: 0.875rem; }
-    .bulk-hint { font-size: 0.8125rem; color: #6b6a66; }
-    .page-size { font-size: 0.75rem; color: #666; }
-    .background-status { font-size: 0.875rem; color: #666; margin-bottom: 1rem; }
-    /* Stage 2: Progress */
+    .bulk-hint { font-size: 0.8125rem; color: var(--muted); }
+    .page-size { font-size: 0.75rem; color: var(--muted); }
+    /* The overlay while the pages are combined */
     .progress-overlay {
       position: fixed;
       inset: 0;
+      top: 0; right: 0; bottom: 0; left: 0;
       background: rgba(0,0,0,0.5);
       display: flex;
       align-items: center;
@@ -160,8 +213,11 @@
       border-radius: 12px;
       text-align: center;
       min-width: 280px;
+      max-width: min(90vw, 480px);
     }
     .progress-box h3 { margin-top: 0; }
+    .progress-box h3:focus { outline: none; }
+    .progress-box p { overflow-wrap: anywhere; word-break: break-word; }
     .progress-bar {
       height: 8px;
       background: var(--border);
@@ -174,22 +230,33 @@
       background: var(--secondary);
       transition: width 0.2s;
     }
-    /* Stage 3 */
+    /* Step 4 */
     .dl-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
     .dl-option { display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem; padding: 1.125rem; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
     .dl-option.is-best { border: 2px solid var(--primary); }
     .dl-option h3 { margin: 0; font-size: 1.125rem; }
-    .dl-option p { margin: 0; color: #6b6a66; font-size: 0.875rem; }
-    .dl-option .btn { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+    .dl-option p { margin: 0; color: var(--muted); font-size: 0.875rem; }
+    .dl-option .btn { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; text-align: left; }
+    .dl-sub { font-size: 0.875rem; color: var(--muted); margin-top: -0.35rem; }
+    .dl-sub:empty { display: none; }
     .dl-tag { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #1f5a36; }
     .dl-tag.is-bad { color: #b3261e; }
-    .dl-tag.is-quiet { color: #6b6a66; }
+    .dl-tag.is-quiet { color: var(--muted); }
     .dl-size { font-size: 1.75rem; font-weight: 700; color: var(--primary); font-variant-numeric: tabular-nums; }
     .dl-size.is-bad { color: #b3261e; }
+    .dl-size.is-quiet { font-size: 1rem; font-weight: 500; color: var(--muted); }
+    .dl-warn { color: #7a4a00; font-size: 0.875rem; background: #fff6e5; border: 1px solid #f3d9a4; border-radius: 8px; padding: 0.5rem 0.75rem; }
+    .shrink-controls { display: flex; flex-direction: column; gap: 0.5rem; }
+    .quality-control { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.875rem; color: #666; }
+    .quality-control input[type="range"] { width: 100%; max-width: 260px; accent-color: var(--primary); }
+    .quality-hint { color: var(--muted); }
+    .grayscale-option { display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; color: #666; cursor: pointer; }
+    .grayscale-option input { margin: 0; width: 18px; height: 18px; }
     .compare-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
     .compare-row .btn { padding: 0.45rem 0.8rem; font-size: 0.875rem; }
-    .compare-pick { font-size: 0.875rem; color: #6b6a66; display: flex; align-items: center; gap: 0.35rem; }
+    .compare-pick { font-size: 0.875rem; color: var(--muted); display: flex; align-items: center; gap: 0.35rem; }
     .compare-pick select { font: inherit; padding: 0.3rem 0.4rem; border: 1px solid #cfccc2; border-radius: 6px; background: #fff; }
+    @media (hover: none) { .compare-row { display: none; } }
     @media (max-width: 700px) { .dl-options { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -198,92 +265,123 @@
     <header class="app-top-bar">
       <img class="app-mark" src="icons/favicon.svg" alt="" width="40" height="40">
       <div class="app-title">
-        <span class="app-name">PaperTooling</span>
-        <span class="app-tag">PDF stripper · keep the pages you need, shrink the file · Click Plumbing and Electrical</span>
+        <h1 class="app-name">PaperTooling</h1>
+        <span class="app-tag">Combine PDFs, cut the pages you don't need, shrink the file · by Click Plumbing and Electrical</span>
       </div>
     </header>
     <div class="app-steps-bar">
-      <div class="app-steps" aria-label="Steps">
-        <span class="app-step" data-step="drop"><b>1</b> Choose a PDF</span>
-        <span class="app-step" data-step="stage1"><b>2</b> Pick pages</span>
-        <span class="app-step" data-step="stage3"><b>3</b> Download</span>
-      </div>
+      <nav aria-label="Steps">
+        <ol class="app-steps">
+          <li><button type="button" class="app-step" data-step="drop" disabled><b>1</b> Choose PDFs</button></li>
+          <li><button type="button" class="app-step" data-step="files" disabled><b>2</b> Put in order</button></li>
+          <li><button type="button" class="app-step" data-step="stage1" disabled><b>3</b> Pick pages</button></li>
+          <li><button type="button" class="app-step" data-step="stage3" disabled><b>4</b> Download</button></li>
+        </ol>
+      </nav>
       <span class="app-file" id="app-file"></span>
       <span class="app-keep" id="app-keep"></span>
     </div>
+    <div id="announce" class="visually-hidden" aria-live="polite"></div>
 
-    <!-- Stage 0: Drop zone -->
+    <!-- Step 1: Drop zone -->
     <div id="stage-drop" class="section">
-      <div id="drop-error" class="error-msg hidden"></div>
-      <div id="drop-zone" class="drop-zone">
-        <div class="drop-icon">&#128196;</div>
-        <p><strong>Drop a PDF here</strong> or click to choose a file</p>
-        <p style="font-size: 0.875rem;">Supported: PDF files</p>
-        <input type="file" id="file-input" accept="application/pdf" style="display: none;">
+      <div id="drop-error" class="error-msg hidden" role="alert"></div>
+      <div id="drop-zone" class="drop-zone" role="button" tabindex="0" aria-describedby="drop-help">
+        <div class="drop-icon" aria-hidden="true">&#128196;</div>
+        <p><strong>Drop PDFs here</strong> or click to choose · one to cut pages from it, several to combine them</p>
+        <p id="drop-help" style="font-size: 0.875rem;">As many PDFs as you like. Nothing is uploaded, so there is no size limit beyond this computer's memory.</p>
+        <p class="drop-status" id="drop-status"></p>
+        <input type="file" id="file-input" class="visually-hidden" accept="application/pdf,.pdf" multiple tabindex="-1" aria-hidden="true">
       </div>
-      <p class="privacy-note">Nothing is uploaded. The PDF is opened, trimmed and saved inside this browser tab.</p>
+      <div id="drop-note" class="note-msg"></div>
+      <p class="privacy-note">Nothing is uploaded. The PDFs are opened, combined, cut and saved inside this browser tab.</p>
     </div>
 
-    <!-- Stage 1: Page selection -->
+    <!-- Step 2: Files, in order -->
+    <div id="stage-files" class="section hidden">
+      <h2 tabindex="-1">Put the files in order</h2>
+      <p class="files-hint">The pages are combined in this order. <span class="mouse-only">Drag a row, or use the arrows.</span><span class="touch-only">Use the arrows to move a file.</span> Drop more PDFs anywhere on this list.</p>
+      <div id="files-list" class="files-list"></div>
+      <div id="files-total" class="files-total"></div>
+      <div id="files-warn" class="files-warn"></div>
+      <div id="files-note" class="note-msg"></div>
+      <div id="files-error" class="error-msg hidden" role="alert"></div>
+      <div class="actions">
+        <button type="button" class="btn btn-secondary" id="btn-add-files">Add PDFs</button>
+        <button type="button" class="btn btn-secondary" id="btn-sort-files">Sort A → Z</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-secondary" id="btn-start-over-files">Start over</button>
+        <button type="button" class="btn" id="btn-continue-files" disabled>Continue to pages</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Page selection -->
     <div id="stage-1" class="section hidden">
-      <h2>Pick pages</h2>
+      <h2 tabindex="-1">Pick pages</h2>
       <div class="bulk-actions">
         <button type="button" class="btn btn-secondary" id="btn-select-all">Keep all</button>
         <button type="button" class="btn btn-secondary" id="btn-deselect-all">Keep none</button>
         <button type="button" class="btn btn-secondary" id="btn-invert">Invert</button>
-        <span class="bulk-hint">Every page starts kept. Click a page to cut it · shift-click for a range.</span>
+        <button type="button" class="btn btn-secondary" id="btn-add-files-pages">Add PDFs</button>
+        <span class="bulk-hint">Every page starts kept. <span class="mouse-only">Click a page to cut it · shift-click (or Shift+Enter) for a range · arrow keys move between pages.</span><span class="touch-only">Tap a page to cut it.</span></span>
       </div>
-      <div id="background-status" class="background-status hidden"></div>
-      <div id="thumb-grid" class="thumb-grid"></div>
-      <div id="stage1-error" class="error-msg hidden"></div>
+      <div id="stage1-note" class="note-msg"></div>
+      <div id="thumb-grid" class="thumb-grid" role="group" aria-label="Pages"></div>
+      <div id="stage1-error" class="error-msg hidden" role="alert"></div>
       <div class="actions">
-        <button type="button" class="btn btn-secondary" id="btn-back-1">Back</button>
+        <button type="button" class="btn btn-secondary" id="btn-back-1">Back to files</button>
         <button type="button" class="btn" id="btn-continue-1" disabled>Continue to Download</button>
       </div>
     </div>
 
-    <!-- Stage 2: Compression (progress overlay) -->
-    <div id="stage-2-overlay" class="progress-overlay hidden">
+    <!-- Combining (progress overlay) -->
+    <div id="stage-2-overlay" class="progress-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="progress-title" aria-describedby="progress-text">
       <div class="progress-box">
-        <h3>Getting both versions ready</h3>
+        <h3 id="progress-title" tabindex="-1">Combining the pages</h3>
         <p id="progress-text">Preparing...</p>
-        <div class="progress-bar">
+        <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
           <div id="progress-fill" class="progress-bar-fill" style="width: 0%"></div>
         </div>
       </div>
     </div>
 
-    <!-- Stage 3: Download -->
+    <!-- Step 4: Download -->
     <div id="stage-3" class="section hidden">
-      <h2>Download</h2>
+      <h2 tabindex="-1">Download</h2>
       <div class="dl-options">
         <div class="dl-option" id="opt-pages">
           <span class="dl-tag" id="tag-pages"></span>
-          <h3>Just these pages</h3>
+          <h3 id="title-pages">Just these pages</h3>
+          <div class="dl-sub" id="sub-pages"></div>
           <div class="dl-size" id="size-pages"></div>
-          <p>The pages exactly as they are — text stays sharp, selectable and searchable. Nothing is re-drawn.</p>
+          <p id="desc-pages">The pages exactly as they are — text stays sharp, selectable and searchable. Nothing is re-drawn.</p>
+          <p class="dl-warn hidden" id="pages-warn"></p>
           <button type="button" class="btn" id="btn-download-pages">Download</button>
         </div>
         <div class="dl-option" id="opt-shrink">
           <span class="dl-tag" id="tag-shrink"></span>
           <h3>Shrink it</h3>
           <div class="dl-size" id="size-shrink"></div>
-          <p>Re-draws each page as a picture. That helps scans and phone photos; a PDF that is already text usually grows, and its text stops being selectable.</p>
-          <div class="quality-control">
-            <label for="quality-slider">Quality kept: <span id="quality-value">97</span>% <span class="quality-hint">(lower = smaller)</span></label>
-            <input type="range" id="quality-slider" min="90" max="99" value="97" step="1">
+          <p>Re-draws each page as a picture. That helps scans and phone photos; drawings and text usually get <em>bigger</em>, and the text stops being selectable.</p>
+          <div class="shrink-controls" id="shrink-controls">
+            <div class="quality-control">
+              <label for="quality-slider">Quality kept: <span id="quality-value">97</span>% <span class="quality-hint">(lower = smaller)</span></label>
+              <input type="range" id="quality-slider" min="90" max="99" value="97" step="1">
+            </div>
+            <label class="grayscale-option">
+              <input type="checkbox" id="grayscale-checkbox">
+              Grayscale (smaller still)
+            </label>
           </div>
-          <label class="grayscale-option">
-            <input type="checkbox" id="grayscale-checkbox">
-            Grayscale (smaller still)
-          </label>
+          <button type="button" class="btn btn-secondary hidden" id="btn-shrink-estimate">Estimate the shrunk size</button>
           <button type="button" class="btn" id="btn-download">Download</button>
-          <div class="compare-row">
+          <div class="compare-row" id="compare-row">
             <button type="button" class="btn btn-secondary" id="btn-compare">Compare before / after</button>
             <label class="compare-pick">on <select id="compare-page" aria-label="Page to compare"></select></label>
           </div>
         </div>
       </div>
+      <div id="stage3-note" class="note-msg"></div>
       <div class="actions">
         <button type="button" class="btn btn-secondary" id="btn-back-3">Back to pages</button>
         <button type="button" class="btn btn-secondary" id="btn-start-over">Start over</button>
